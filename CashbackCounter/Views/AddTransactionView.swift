@@ -40,6 +40,8 @@ struct AddTransactionView: View {
     @State private var paymentMethod: String
     @State private var isOnlineShopping: Bool
     @State private var isCBFApplied: Bool
+    @State private var showCBFInput: Bool // 🆕 控制 CBF 输入框显示
+    @State private var cbfAmount: Double? // 🆕 存储手动输入的 CBF 金额
     
     // --- 返现规则选择 ---
     @State private var selectedCashbackRuleIndex: Int?
@@ -80,6 +82,10 @@ struct AddTransactionView: View {
             _isOnlineShopping = State(initialValue: t.isOnlineShopping)
             _isCBFApplied = State(initialValue: t.isCBFApplied)
             
+            // 初始化 CBF 状态
+            _cbfAmount = State(initialValue: t.cbfAmount > 0 ? t.cbfAmount : nil)
+            _showCBFInput = State(initialValue: t.cbfAmount > 0)
+            
             _selectedCashbackRuleIndex = State(initialValue: nil)
             _cashbackCalculationDetails = State(initialValue: nil)
             _isAnalyzing = State(initialValue: false)
@@ -106,6 +112,10 @@ struct AddTransactionView: View {
             _paymentMethod = State(initialValue: "")
             _isOnlineShopping = State(initialValue: false)
             _isCBFApplied = State(initialValue: false)
+            
+            // 🆕 初始化 CBF 状态
+            _cbfAmount = State(initialValue: nil)
+            _showCBFInput = State(initialValue: false)
             
             _selectedCashbackRuleIndex = State(initialValue: nil)
             _cashbackCalculationDetails = State(initialValue: nil)
@@ -195,6 +205,7 @@ struct AddTransactionView: View {
                 cashbackCalculationDetails = nil
             }
             .onChange(of: isCBFApplied) { cashbackCalculationDetails = nil }
+            .onChange(of: cbfAmount) { cashbackCalculationDetails = nil } // 🆕 监听 CBF 金额变化
             .onChange(of: selectedCategory) { cashbackCalculationDetails = nil }
             .onChange(of: location) { cashbackCalculationDetails = nil }
             .onChange(of: date) { cashbackCalculationDetails = nil }
@@ -209,11 +220,11 @@ struct AddTransactionView: View {
                 selectedCategory: $selectedCategory,
                 location: $location,
                 spendingCurrency: $spendingCurrency,
-                billingCurrency: $billingCurrency, // 🆕
-                billingAmount: $billingAmount, // 🆕
-                billingAmountFromReceipt: $billingAmountFromReceipt, // 🆕
-                cards: cards, // 🆕
-                selectedCardIndex: selectedCardIndex, // 🆕
+                billingCurrency: $billingCurrency,
+                billingAmount: $billingAmount,
+                billingAmountFromReceipt: $billingAmountFromReceipt,
+                cards: cards,
+                selectedCardIndex: selectedCardIndex,
                 focusedField: $focusedField
             )
             
@@ -446,13 +457,16 @@ struct AddTransactionView: View {
                 t.isOnlineShopping = isOnlineShopping
                 t.isCBFApplied = isCBFApplied
                 
+                // 🆕 更新 CBF 金额
+                t.cbfAmount = cbfAmount ?? 0.0
+                
                 if t.card != card || t.billingAmount != billingAmountDouble || t.category != selectedCategory || t.date != date {
                     t.card = card
                     t.billingAmount = billingAmountDouble
                     t.category = selectedCategory
                     t.rate = nominalRate
                     t.cashbackamount = finalCashback
-                    t.cbfAmount = cashbackCalculationDetails?.cbfAmount ?? 0.0
+                    // t.cbfAmount = cashbackCalculationDetails?.cbfAmount ?? 0.0 // 旧逻辑
                 }
                 
                 if let img = imageData { t.receiptData = img }
@@ -470,7 +484,7 @@ struct AddTransactionView: View {
                     receiptData: imageData,
                     billingAmount: billingAmountDouble,
                     cashbackAmount: finalCashback,
-                    cbfAmount: cashbackCalculationDetails?.cbfAmount ?? 0.0
+                    cbfAmount: cbfAmount ?? 0.0 // 🆕 使用手动输入的 CBF
                 )
                 context.insert(newTransaction)
             }
@@ -601,22 +615,17 @@ private struct TransactionAttributesSection: View {
     @Binding var isCBFApplied: Bool
     var aiSupported: Bool
     
-    private static let candidates = [
-        AppConstants.OCR.sale,
-        AppConstants.Transaction.applePay,
-        AppConstants.Transaction.unionPayQR,
-        AppConstants.Transaction.offlineShopping,
-        AppConstants.Transaction.refund,
-        AppConstants.Transaction.repayment,
-        AppConstants.OCR.instalment,
-        AppConstants.General.other
-    ]
+    private var filterOptions: [String] {
+        var options = [AppConstants.OCR.sale] // 默认 SALE 放第一位
+        options.append(contentsOf: AppConstants.OCR.PaymentDetection.candidates)
+        return options
+    }
     
     var body: some View {
         Section(header: Text(AppConstants.Transaction.transactionAttributes)) {
             Picker(AppConstants.Transaction.paymentMethodLabel, selection: $paymentMethod) {
                 Text(AppConstants.General.notSelected).tag("")
-                ForEach(Self.candidates, id: \.self) { method in
+                ForEach(filterOptions, id: \.self) { method in
                     Text(method).tag(method)
                 }
             }

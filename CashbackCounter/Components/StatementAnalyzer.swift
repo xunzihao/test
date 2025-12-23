@@ -199,21 +199,16 @@ final class StatementAnalyzer {
             if uppercasedText.contains(AppConstants.OCR.statementDate) || 
                text.contains(AppConstants.OCR.statementDateCN) ||
                text.contains("結單日") {
-                // 1. 尝试在当前行找
-                if let date = extractDate(from: text, formats: ["dd MMM yyyy", "yyyy-MM-dd", "dd/MM/yyyy"]) {
-                    result.statementDate = date
-                    logger.info("Found statement date in header row: \(date)")
-                    break
-                }
                 
-                // 2. 尝试在下一行找
-                if index + 1 < rows.count {
-                    let nextRow = rows[index + 1]
-                    // 检查下一行是否只是一个日期，或者包含日期
-                    if let date = extractDate(from: nextRow.text, formats: ["dd MMM yyyy", "yyyy-MM-dd", "dd/MM/yyyy"]) {
+                // 搜索范围：当前行及后两行
+                let maxOffset = min(index + 2, rows.count - 1)
+                for i in index...maxOffset {
+                    let rowText = rows[i].text
+                    // 尝试多种格式
+                    if let date = extractDate(from: rowText, formats: ["dd MMM yyyy", "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy/MM/dd"]) {
                         result.statementDate = date
-                        logger.info("Found statement date in next row: \(date)")
-                        break
+                        logger.info("Found statement date in row \(i): \(date)")
+                        return
                     }
                 }
             }
@@ -404,12 +399,18 @@ final class StatementAnalyzer {
                method == AppConstants.Transaction.repayment ||
                method == AppConstants.OCR.autoRepayment ||
                method == AppConstants.OCR.instalment ||
-               method == AppConstants.Transaction.cbf
+               method == AppConstants.Transaction.cbf ||
+               method == AppConstants.Transaction.cashbackRebate // 返现也算作非消费类
     }
     
     private func detectPaymentMethod(from description: String, amount: Double) -> String? {
         let desc = description.uppercased()
         let correctedDesc = TextCorrector.correctMerchantName(desc)
+        
+        // 1. 优先检测返现 (Rebate) - 放在最前面，确保包含 REBATE 就被归类
+        if OCRService.containsAny(AppConstants.OCR.PaymentDetection.rebate, in: correctedDesc) {
+            return AppConstants.Transaction.cashbackRebate
+        }
         
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.applePay, in: correctedDesc) { return AppConstants.Transaction.applePay }
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.unionPayQR, in: correctedDesc) { return AppConstants.Transaction.unionPayQR }
@@ -501,34 +502,75 @@ final class StatementAnalyzer {
     }
     
     private func extractDate(from text: String, formats: [String]) -> Date? {
+        // 1. 优先尝试 NSDataDetector (智能识别)
+        // 扩展识别范围：检测整个字符串，而不仅仅是特定格式
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
+            let matches = detector.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
+            if let date = matches.first?.date {
+                return date
+            }
+        }
+        
+        // 2. 尝试 DateFormatter (精确格式匹配)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         
+        // 预处理文本：去除多余空格，转大写（匹配 MMM）
+        // 注意：DateFormatter 对多余字符很敏感，所以这里主要用于“文本本身就是日期”的情况
+        // 或者我们尝试从文本中提取符合格式的子串（但这比较复杂，暂略）
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        
         for format in formats {
             formatter.dateFormat = format
-            // 这里用 DateFormatter 已经足够，不需要复杂的正则，除非格式很乱
-            // 保持原逻辑的简单尝试
-            
-            // 如果需要提取日期字符串，可以使用 RegexBuilder 构建通用日期匹配器
-            // 但考虑到格式多样性，DateFormatter.date(from:) 是最准的，前提是输入字符串比较干净
-            // 我们可以尝试从文本中提取像日期的片段
-            
-            // 简单策略：尝试对整个字符串进行匹配，或者分割后匹配
-            // 原有逻辑是用正则辅助提取，我们这里保留 DateFormatter 直接尝试（如果字符串只是日期）
-            // 或者用 NSDataDetector (Vision 也可以检测日期，但我们这里是纯文本处理)
-            
-            // 为了兼容旧逻辑的灵活性，我们用 NSDataDetector
-            if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-                let matches = detector.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
-                if let date = matches.first?.date {
-                    return date
-                }
+            if let date = formatter.date(from: cleanText) {
+                return date
             }
         }
+        
+        // 3. 正则辅助提取 (针对 "25 DEC 2024" 这种混杂在文本中的情况)
+        // 常见于 OCR 结果中包含 label 的情况，例如 "Statement Date 25 DEC 2024"
+        // 简单的正则匹配 "dd MMM yyyy"
+        let dateRegex = Regex {
+            Capture {
+                OneOrMore(.digit)
+                OneOrMore(.whitespace)
+                Repeat(count: 3) { ("A"..."Z") }
+                OneOrMore(.whitespace)
+                Repeat(count: 4) { .digit }
+            }
+        }
+        
+        if let match = try? dateRegex.firstMatch(in: cleanText) {
+            let dateStr = String(match.0)
+            formatter.dateFormat = "dd MMM yyyy"
+            if let date = formatter.date(from: dateStr) {
+                return date
+            }
+        }
+        
         return nil
     }
     
-    private func isCurrencyCode(_ text: String) -> Bool {
+    /// 修正日期年份
+    static func fixDateYear(_ date: Date, referenceDate: Date) -> Date {
+        var components = Calendar.current.dateComponents([.day, .month, .year], from: date)
+        
+        let refYear = Calendar.current.component(.year, from: referenceDate)
+        let refMonth = Calendar.current.component(.month, from: referenceDate)
+        
+        components.year = refYear
+        
+        if let month = components.month {
+            // 如果交易月份大于结单月份，说明是上一年的交易
+            // 例如：结单日 2025年1月，交易日 12月 -> 2024年
+            if month > refMonth {
+                components.year = refYear - 1
+            }
+        }
+        
+        return Calendar.current.date(from: components) ?? date
+    }
+        private func isCurrencyCode(_ text: String) -> Bool {
         let currencyCodes: Set<String> = Set(AppConstants.Currency.all.map { $0.uppercased() })
         return currencyCodes.contains(text.uppercased().trimmingCharacters(in: .whitespaces))
     }

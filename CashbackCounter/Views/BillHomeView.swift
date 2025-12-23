@@ -28,6 +28,7 @@ struct BillHomeView: View {
     @State private var showTrendSheet = false
     @State private var showExpenseSheet = false
     @State private var showAddCashbackSheet = false
+    @State private var showSearchSheet = false
     
     // Filter State
     @State private var selectedDate = Date()
@@ -135,6 +136,7 @@ struct BillHomeView: View {
                     }
                     .padding(.bottom, 20)
                 }
+                .refreshable { await refreshRates() }
             }
             .navigationTitle(AppConstants.General.appName)
             .navigationBarTitleDisplayMode(.inline)
@@ -149,10 +151,14 @@ struct BillHomeView: View {
                 
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        if !filteredTransactions.isEmpty {
-                            ShareLink(item: TransactionCSV(transactions: filteredTransactions), preview: SharePreview(AppConstants.Home.exportBill)) {
-                                Label(AppConstants.Home.exportBill, systemImage: "square.and.arrow.up")
-                            }
+                        ShareLink(item: TransactionCSV(transactions: filteredTransactions), preview: SharePreview(AppConstants.Home.exportBill)) {
+                            Label(AppConstants.Home.exportBill, systemImage: "square.and.arrow.up")
+                        }
+                        
+                        Button {
+                            showSearchSheet = true
+                        } label: {
+                            Label("搜索交易", systemImage: "magnifyingglass")
                         }
                         
                         Divider()
@@ -198,6 +204,9 @@ struct BillHomeView: View {
             .sheet(isPresented: $showAddCashbackSheet) {
                 AddCashbackView()
             }
+            .sheet(isPresented: $showSearchSheet) {
+                SearchTransactionView()
+            }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
                 handleImport(result)
             }
@@ -207,7 +216,6 @@ struct BillHomeView: View {
                 Text(importMessage)
             }
             .task { await refreshRates() }
-            .refreshable { await refreshRates() }
         }
     }
     
@@ -219,13 +227,103 @@ struct BillHomeView: View {
     }
     
     private func calculateTotal(for type: CalculationType) -> [String] {
-        let validTxs = filteredTransactions.filter { $0.isCreditTransaction != true }
+        var validTxs = filteredTransactions
+        
+        // --- 核心逻辑：智能抵消 (Offset) ---
+        // 1. 找出所有退款/信用交易 (refunds) 和 普通消费 (expenses)
+        let refunds = validTxs.filter { $0.isCreditTransaction }
+        let expenses = validTxs.filter { !$0.isCreditTransaction }
+        
+        // 2. 建立需要被抵消的交易 ID 集合
+        var offsetTransactionIDs = Set<PersistentIdentifier>()
+        
+        // 3. 遍历退款，寻找匹配的消费
+        // 为了避免重复匹配，我们需要一个临时的 expenses 池
+        var availableExpenses = expenses
+        
+        for refund in refunds {
+            // 匹配条件：
+            // a. 商户名相似（这里简单用包含或前缀匹配，忽略大小写）
+            // b. 金额相近（允许 1.0 的误差）
+            // c. 尚未被匹配
+            
+            if let matchIndex = availableExpenses.firstIndex(where: { expense in
+                // 1. 金额匹配：退款金额通常是负数（在 TransactionRow 里显示时），但在 billingAmount 存储时可能是一样的正数或者负数
+                // 假设 billingAmount 对于消费是正数，对于退款可能是负数，或者也是正数但 isCreditTransaction=true
+                // 无论如何，我们要比较的是绝对值
+                let amountDiff = abs(abs(expense.billingAmount) - abs(refund.billingAmount))
+                guard amountDiff < 1.0 else { return false } // 允许 1.0 的误差
+                
+                // 2. 商户名匹配
+                // 简单规则：归一化后，是否互相包含，或者 Levenshtein 距离很小
+                // 这里用简单的包含检查，通常退款单的商户名会包含消费单的关键字
+                let expMerchant = expense.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                let refMerchant = refund.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                
+                // 如果长度差异太大，可能不是同一个
+                return expMerchant.contains(refMerchant) || refMerchant.contains(expMerchant)
+            }) {
+                // 找到匹配！
+                let matchedExpense = availableExpenses[matchIndex]
+                
+                // 标记这对交易为“已抵消”
+                offsetTransactionIDs.insert(matchedExpense.persistentModelID)
+                offsetTransactionIDs.insert(refund.persistentModelID)
+                
+                // 从可用池中移除，避免被再次匹配
+                availableExpenses.remove(at: matchIndex)
+            }
+        }
+        
+        // 4. 过滤掉已抵消的交易
+        validTxs = validTxs.filter { !offsetTransactionIDs.contains($0.persistentModelID) }
+        
+        // --- 原有逻辑继续 ---
+        
+        validTxs = validTxs.filter { 
+            // 支出计算：排除所有信用交易 (isCreditTransaction=true)
+            // 返现计算：排除信用交易，但必须包含 "返现" 类型的交易
+            // CBF 费用：它被标记为 cbf，且 isCreditTransaction = true（因为是负向费用？）
+            // 让我们确认 CBF 的属性：paymentMethod = "CBF", isCreditTransaction = ? 
+            // 通常 CBF 是额外的费用，应该是正数入账，或者负数？
+            // 如果 CBF 是费用，它应该算在支出里。
+            
+            if type == .expense {
+                // 支出包括：
+                // 1. 普通消费 (isCreditTransaction = false)
+                // 2. CBF 费用 (paymentMethod = "CBF")，即使它可能被错误标记为 credit，或者我们需要明确包含它
+                // 根据之前的逻辑，CBF 被归类为 isRefundOrRepayment -> isCreditTransaction = true?
+                // 如果是这样，我们需要特例放行 CBF
+                return $0.isCreditTransaction != true || $0.paymentMethod == AppConstants.Transaction.cbf
+            } else {
+                // 如果是返现统计，我们既要包含普通交易产生的计算返现，也要包含直接的“返现”交易
+                // 普通交易：isCreditTransaction == false
+                // 返现交易：paymentMethod == "返现" (即使 isCreditTransaction == true)
+                return $0.isCreditTransaction == false || $0.paymentMethod == AppConstants.Transaction.cashbackRebate
+            }
+        }
         guard !validTxs.isEmpty else { return ["0"] }
         
         if let card = selectedCard {
             let symbol = card.issueRegion.currencySymbol
             let total = validTxs.reduce(0.0) { acc, t in
-                acc + (type == .expense ? t.billingAmount : CashbackService.calculateCashback(for: t))
+                if type == .expense {
+                    // 支出累加
+                    // 如果是 CBF，取绝对值加入支出（假设它是正向成本）
+                    // 普通消费也是取 billingAmount
+                    return acc + abs(t.billingAmount)
+                } else {
+                    // 如果是直接的返现交易，累加其入账金额（billingAmount，通常为正数表示获得的返现）
+                    if t.paymentMethod == AppConstants.Transaction.cashbackRebate {
+                        // 注意：入账金额在 Transaction 中通常是正数。
+                        // 如果在数据库中返现是负数（表示抵扣），这里需要取绝对值或者直接加
+                        // 假设：返现交易的 billingAmount 记录的是获得的金额（正数）
+                        return acc + abs(t.billingAmount)
+                    } else {
+                        // 普通交易计算理论返现
+                        return acc + CashbackService.calculateCashback(for: t)
+                    }
+                }
             }
             return ["\(symbol)\(String(format: "%.2f", total))"]
         } else {
@@ -234,7 +332,18 @@ struct BillHomeView: View {
             
             for t in validTxs {
                 let code = t.card?.issueRegion.currencyCode ?? "CNY"
-                let amt = type == .expense ? t.billingAmount : CashbackService.calculateCashback(for: t)
+                var amt = 0.0
+                
+                if type == .expense {
+                    amt = abs(t.billingAmount)
+                } else {
+                    if t.paymentMethod == AppConstants.Transaction.cashbackRebate {
+                        amt = abs(t.billingAmount)
+                    } else {
+                        amt = CashbackService.calculateCashback(for: t)
+                    }
+                }
+                
                 if code == "CNY" { cnyTotal += amt }
                 else if code == "HKD" { hkdTotal += amt }
             }

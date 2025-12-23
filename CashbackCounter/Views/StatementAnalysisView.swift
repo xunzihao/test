@@ -147,14 +147,16 @@ struct StatementAnalysisView: View {
                 StatementCardPickerView(cards: cards, selected: $matchedCard)
             }
             .sheet(item: $editingConfig) { config in
-                StatementEditTransactionView(
-                    transaction: config.transaction,
-                    onSave: { updatedTrans in
-                        updateTransaction(at: config.index, with: updatedTrans)
-                        editingConfig = nil
-                    },
-                    onCancel: { editingConfig = nil }
-                )
+                NavigationStack {
+                    AddTransactionToStatementView(
+                        transactionToEdit: config.transaction,
+                        onAdd: { updatedTrans in
+                            updateTransaction(at: config.index, with: updatedTrans)
+                            editingConfig = nil
+                        },
+                        onCancel: { editingConfig = nil }
+                    )
+                }
             }
             .sheet(isPresented: $showAddSheet) {
                 NavigationStack {
@@ -283,7 +285,6 @@ struct StatementAnalysisView: View {
         var allTransactions: [StatementAnalysisResult.ParsedTransaction] = []
         var combinedRawText = ""
         var firstPageMetadata: (cardName: String, cardLastFour: String, statementDate: Date?) = ("", "", nil)
-        
         for (index, image) in pdfImages.enumerated() {
             await MainActor.run { currentAnalyzingPage = index + 1 }
             
@@ -298,8 +299,37 @@ struct StatementAnalysisView: View {
                 allTransactions.append(contentsOf: pageResult.transactions)
                 
                 if index == 0 {
-                    firstPageMetadata = (pageResult.cardName, pageResult.cardLastFour, pageResult.statementDate)
+                    firstPageMetadata.cardName = pageResult.cardName
+                    firstPageMetadata.cardLastFour = pageResult.cardLastFour
                 }
+                
+                // 2. 结单日期：优先取非空的
+                // 如果当前还没找到，且本页找到了，就更新
+                if firstPageMetadata.statementDate == nil {
+                    firstPageMetadata.statementDate = pageResult.statementDate
+                }
+                
+                // 3. 关键修改：将识别到的结单日传递给 analyzer 重新处理当前页的交易年份
+                // 即使 pageResult.statementDate 为 nil，只要全局 firstPageMetadata.statementDate 有值，
+                // 我们就应该尝试修正当前页交易的年份（因为有些页可能没结单日，但交易年份需要基于全局结单日推断）
+                // 而如果当前页自己就有结单日，那 analyzer 内部其实已经处理好了（但为了保险，或者处理跨年边界，
+                // 我们可以考虑是否需要二次处理。目前 analyzer.analyze 内部是基于传入的 image，
+                // 它自己解析出 statementDate 后会用来推断年份。
+                // 这里的痛点是：如果这一页识别出了交易，但没识别出结单日，导致年份推断可能出错（默认当前年）。
+                // 所以我们应该：如果当前页没找到结单日，但之前页找到了，我们需要修正这一页交易的日期。
+                
+                if let validStatementDate = firstPageMetadata.statementDate {
+                    // 修正当前页交易的年份
+                    for i in (allTransactions.count - pageResult.transactions.count)..<allTransactions.count {
+                        if allTransactions[i].postDate != nil {
+                            allTransactions[i].postDate = StatementAnalyzer.fixDateYear(allTransactions[i].postDate!, referenceDate: validStatementDate)
+                        }
+                        if allTransactions[i].transDate != nil {
+                            allTransactions[i].transDate = StatementAnalyzer.fixDateYear(allTransactions[i].transDate!, referenceDate: validStatementDate)
+                        }
+                    }
+                }
+                
                 combinedRawText += "\n\n--- \(String(format: AppConstants.StatementAnalysis.pageNumber, index + 1)) ---\n\n\(pageResult.rawText)"
             } catch {
                 print(String(format: AppConstants.StatementAnalysis.pageAnalysisFailed, index + 1, error.localizedDescription))
@@ -519,6 +549,8 @@ struct StatementAnalysisView: View {
 }
 
 // MARK: - Subviews
+
+// 移除了 StatementEditTransactionView，因为现在复用了 AddTransactionToStatementView
 
 private struct StatementImageSelectionView: View {
     let onSelectImage: () -> Void
@@ -900,87 +932,5 @@ private struct StatementCardPickerView: View {
     }
 }
 
-private struct StatementEditTransactionView: View {
-    @State var transaction: StatementAnalysisResult.ParsedTransaction
-    var onSave: (StatementAnalysisResult.ParsedTransaction) -> Void
-    var onCancel: () -> Void
-    
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(AppConstants.StatementAnalysis.merchantInfoSection) {
-                    TextField(AppConstants.StatementAnalysis.merchantNameField, text: $transaction.description)
-                }
-                
-                Section(AppConstants.StatementAnalysis.transactionAmountSection) {
-                    HStack {
-                        Text(AppConstants.StatementAnalysis.currencyHKD).foregroundColor(.secondary)
-                        TextField(AppConstants.StatementAnalysis.amountField, value: $transaction.billingAmount, format: .number.precision(.fractionLength(2)))
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    
-                    if transaction.cbfFee != nil {
-                        HStack {
-                            Text(AppConstants.StatementAnalysis.cbfFeeLabel).foregroundColor(.orange)
-                            TextField(AppConstants.StatementAnalysis.cbfField, value: Binding(
-                                get: { transaction.cbfFee ?? 0 },
-                                set: { transaction.cbfFee = $0 > 0 ? $0 : nil }
-                            ), format: .number.precision(.fractionLength(2)))
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                        }
-                    } else {
-                        Button { transaction.cbfFee = 0.0 } label: { Label(AppConstants.StatementAnalysis.addCbfFeeAction, systemImage: "plus.circle") }
-                    }
-                }
-                
-                Section(AppConstants.StatementAnalysis.transactionDateField) {
-                    DatePicker(AppConstants.StatementAnalysis.postingDateField, selection: Binding(get: { transaction.postDate ?? Date() }, set: { transaction.postDate = $0 }), displayedComponents: .date)
-                    DatePicker(AppConstants.StatementAnalysis.transactionDateField, selection: Binding(get: { transaction.transDate ?? Date() }, set: { transaction.transDate = $0 }), displayedComponents: .date)
-                }
-                
-                Section(AppConstants.StatementAnalysis.paymentMethodField) {
-                    Picker(AppConstants.StatementAnalysis.paymentMethodField, selection: Binding(get: { transaction.paymentMethod ?? "SALE" }, set: { newValue in
-                        transaction.paymentMethod = newValue
-                        transaction.isRefundOrPayment = [
-                            AppConstants.Transaction.refund,
-                            AppConstants.Transaction.repayment,
-                            AppConstants.OCR.autoRepayment,
-                            AppConstants.OCR.instalment,
-                            AppConstants.Transaction.cbf
-                        ].contains(newValue)
-                    })) {
-                        ForEach([
-                            AppConstants.Transaction.sale,
-                            AppConstants.Transaction.applePay,
-                            AppConstants.Transaction.unionPayQR,
-                            AppConstants.Transaction.refund,
-                            AppConstants.Transaction.repayment,
-                            AppConstants.OCR.autoRepayment,
-                            AppConstants.OCR.instalment,
-                            AppConstants.Transaction.cbf
-                        ], id: \.self) { method in
-                            Text(method).tag(method)
-                        }
-                    }
-                }
-                
-                if transaction.isForeignCurrency {
-                    Section(AppConstants.Transaction.foreignCurrencyInfo) {
-                        LabeledContent(AppConstants.Transaction.foreignCurrencyType, value: transaction.spendingCurrency ?? "N/A")
-                        if let amount = transaction.spendingAmount {
-                            LabeledContent(AppConstants.Transaction.foreignCurrencyAmount, value: String(format: "%.2f", amount))
-                        }
-                    }
-                }
-            }
-            .navigationTitle(AppConstants.Transaction.editTransaction)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(AppConstants.General.cancel, action: onCancel) }
-                ToolbarItem(placement: .confirmationAction) { Button(AppConstants.General.confirm) { onSave(transaction) } }
-            }
-        }
-    }
-}
+// 移除不再使用的 StatementEditTransactionView 结构体定义
+

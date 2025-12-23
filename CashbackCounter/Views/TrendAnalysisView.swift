@@ -236,7 +236,7 @@ struct TrendAnalysisView: View {
                  let components = calendar.dateComponents([.year, .month], from: date)
                 
                 // 筛选
-                let monthlyTransactions = transactions.filter { t in
+                var monthlyTransactions = transactions.filter { t in
                     let tComponents = calendar.dateComponents([.year, .month], from: t.date)
                     let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
                     
@@ -250,17 +250,82 @@ struct TrendAnalysisView: View {
                         isFilterMatch = (t.card?.id == card.id)
                     }
                     
-                    return isSameMonth && isFilterMatch && !t.isCreditTransaction
+                    // 逻辑修改：
+                    // 1. 如果是支出分析，排除所有信用交易
+                    // 2. 如果是返现分析，保留普通交易(用于计算) + 纯返现交易(isCreditTransaction=true && method="返现")
+                    if type == .expense {
+                        // 特例：CBF 费用虽然可能被标记为 CR，但应计入支出
+                        return isSameMonth && isFilterMatch && (t.isCreditTransaction != true || t.paymentMethod == AppConstants.Transaction.cbf)
+                    } else {
+                        // 返现分析
+                        return isSameMonth && isFilterMatch && (
+                            t.isCreditTransaction == false ||
+                            t.paymentMethod == AppConstants.Transaction.cashbackRebate
+                        )
+                    }
                 }
+                
+                // --- 智能抵消逻辑 (与 BillHomeView 保持一致) ---
+                // 1. 找出所有退款/信用交易 (在支出分析中通常已经被排除，但在返现分析中可能需要处理)
+                // 注意：在 expense 模式下，monthlyTransactions 已经过滤掉了 CR 交易。
+                // 所以，要在 expense 模式下实现抵消，我们需要先获取包含 CR 的原始数据集，找出抵消关系，再过滤。
+                
+                // 修正策略：
+                // 我们需要重新从原始 transactions 中筛选出本月的所有相关交易（包含 CR），
+                // 计算抵消集合，然后再应用 type == .expense 的过滤。
+                
+                let allMonthTxs = transactions.filter { t in
+                    let tComponents = calendar.dateComponents([.year, .month], from: t.date)
+                    let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
+                    
+                    let isFilterMatch: Bool
+                    switch selectedFilter {
+                    case .all: isFilterMatch = true
+                    case .rewardCash: isFilterMatch = (t.card == nil)
+                    case .card(let card): isFilterMatch = (t.card?.id == card.id)
+                    }
+                    return isSameMonth && isFilterMatch
+                }
+                
+                let refunds = allMonthTxs.filter { $0.isCreditTransaction }
+                let expenses = allMonthTxs.filter { !$0.isCreditTransaction }
+                var offsetTransactionIDs = Set<PersistentIdentifier>()
+                var availableExpenses = expenses
+                
+                for refund in refunds {
+                    if let matchIndex = availableExpenses.firstIndex(where: { expense in
+                        let amountDiff = abs(abs(expense.billingAmount) - abs(refund.billingAmount))
+                        guard amountDiff < 1.0 else { return false }
+                        
+                        let expMerchant = expense.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                        let refMerchant = refund.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                        return expMerchant.contains(refMerchant) || refMerchant.contains(expMerchant)
+                    }) {
+                        let matchedExpense = availableExpenses[matchIndex]
+                        offsetTransactionIDs.insert(matchedExpense.persistentModelID)
+                        offsetTransactionIDs.insert(refund.persistentModelID)
+                        availableExpenses.remove(at: matchIndex)
+                    }
+                }
+                
+                // 应用抵消：过滤掉被标记为抵消的交易
+                monthlyTransactions = monthlyTransactions.filter { !offsetTransactionIDs.contains($0.persistentModelID) }
                 
                 // 计算总额 (根据类型区分逻辑)
                 let total = monthlyTransactions.reduce(0.0) { sum, t in
                     let amountToAdd: Double
                     // 👇 分支逻辑
                     if type == .expense {
-                        amountToAdd = t.billingAmount // 支出算入账金额
+                        amountToAdd = abs(t.billingAmount) // 支出算入账金额 (取绝对值，兼容 CBF 可能为负的情况)
                     } else {
-                        amountToAdd = CashbackService.calculateCashback(for: t) // 使用实时计算的返现金额
+                        // 返现计算
+                        if t.paymentMethod == AppConstants.Transaction.cashbackRebate {
+                            // 纯返现交易：直接取入账金额（假设正数）
+                            amountToAdd = abs(t.billingAmount)
+                        } else {
+                            // 普通交易：计算理论返现
+                            amountToAdd = CashbackService.calculateCashback(for: t)
+                        }
                     }
                     
                     // 汇率换算

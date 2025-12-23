@@ -175,6 +175,7 @@ struct AppConstants {
         static let repayment = "还款"
         static let cbf = "CBF"
         static let sale = "SALE"
+        static let cashbackRebate = "返现" // 🆕 新增返现类型
         static let noTransactions = "暂无账单"
         static let noTransactionsDescription = "该时间段内没有交易记录" // or "此卡片暂无交易记录" depending on context, using the first one
         static let latestTransactions = "最新交易"
@@ -400,10 +401,12 @@ struct AppConstants {
           • 'Apple Pay' if text contains: 'Apple Pay', 'APPLE PAY', 'ApplePay', '苹果支付', 'アップルペイ'
           • '银联二维码' if text contains: 'QR', '二维码', '扫码', '云闪付', 'QuickPass', 'UnionPay QR', 'QRコード'
           • '网购' if text contains: '网购', '在线支付', 'Online Payment', 'E-commerce', 'オンライン'
+          • '返现' if text contains: 'REBATE', 'CASH REBATE', '回赠', '現金回贈', '回贈'
           • '线下购物' for physical store purchases (default for most paper receipts)
           • nil if cannot determine with confidence
         - Examples:
           Receipt: 'Apple Pay ***1234' → paymentMethod='Apple Pay'
+          Receipt: 'CASH REBATE HKD 50' → paymentMethod='返现'
           Receipt: '云闪付二维码支付' → paymentMethod='银联二维码'
           Receipt: '淘宝订单' → paymentMethod='网购'
           Receipt: normal store receipt with no online/QR indicators → paymentMethod='线下购物'
@@ -608,8 +611,9 @@ struct AppConstants {
             static let autoRepayment = ["PAID BY AUTOPAY", "自动还款"]
             static let repayment = ["IFS PAYMENT"]
             static let instalment = ["MOB INSTALMENT", "分期"]
-            static let cbf = ["DCC FEE NON-HK MERCHANT"]
+            static let cbf = ["DCC FEE NON-HK MERCHANT", "DCC FEE-NON-HK MERCHANT", "DCC FEE"]
             static let refund = ["退款", "REFUND", "CREDIT"]
+            static let rebate = ["REBATE", "CASH REBATE", "回赠", "現金回贈", "回贈"] // 🆕 新增返现检测
             static let candidates = [
                 "网购",
                 "Apple Pay",
@@ -617,9 +621,9 @@ struct AppConstants {
                 "线下购物",
                 "退款",
                 "还款",
+                "返现", // 🆕 新增
                 "分期",
                 "SALE",
-//                "CBF",
                 "自动还款",
                 "其他方式"
             ]

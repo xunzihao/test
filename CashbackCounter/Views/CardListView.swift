@@ -58,7 +58,12 @@ struct CardListView: View {
                 
                 // Layer 1: Detail View (Bottom)
                 if let card = currentSelectedCard {
-                    CardDetailLayer(card: card)
+                    CardDetailLayer(card: card) {
+                        // 点击详情页顶部的卡片区域也可以关闭详情
+                        withAnimation(springAnimation) {
+                            selectedCardID = nil
+                        }
+                    }
                 }
                 
                 // Layer 2: Card Stack (Top)
@@ -154,9 +159,21 @@ struct CardListView: View {
 
 private struct CardDetailLayer: View {
     let card: CreditCard
+    let onClose: () -> Void
     
     var body: some View {
         ScrollView(showsIndicators: false) {
+            // 添加一个透明的点击区域覆盖在卡片显示的位置
+            // 实际上这里的 ScrollView 内容是从 padding 280 开始的
+            // 为了让用户点击顶部区域（即视觉上卡片所在的位置）能触发关闭，
+            // 我们可以在这里放置一个透明视图或者让上层处理
+            // 但目前的架构是 CardStackLayer 浮在上面。
+            
+            // 关键逻辑：
+            // 当 isDetailMode 为 true 时，CardStackLayer 中的卡片被移动到了顶部。
+            // 此时点击 CardStackLayer 中的卡片（即 CreditCardView）会触发 CardStackLayer 中的 onTapGesture。
+            // 让我们检查 CardStackLayer 的逻辑。
+            
             EmbeddedTransactionListView(card: card)
         }
         .padding(.top, 280)
@@ -211,8 +228,10 @@ private struct CardStackLayer: View {
                         .onTapGesture {
                             withAnimation(springAnimation) {
                                 if isSelected {
+                                    // 如果当前已经是选中状态（详情模式），再次点击则取消选中（返回列表）
                                     selectedCardID = nil
                                 } else {
+                                    // 否则选中该卡片（进入详情模式）
                                     selectedCardID = card.id
                                 }
                             }
@@ -231,7 +250,10 @@ private struct CardStackLayer: View {
             }
         }
         .scrollDisabled(isDetailMode)
-        .allowsHitTesting(!isDetailMode)
+        // 关键修复：确保在详情模式下，卡片本身依然可以接收点击事件
+        // 之前的 .allowsHitTesting(!isDetailMode) 禁用了整个 ScrollView 的交互，导致点击卡片无效
+        // 我们应该只禁用滚动，但不禁用点击
+        // .allowsHitTesting(!isDetailMode) <--- 删除这一行
     }
     
     private func calculateOffset(index: Int, isSelected: Bool) -> CGFloat {

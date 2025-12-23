@@ -63,13 +63,25 @@ private extension TransactionRow {
                 
                 // 🔥 CR 标记（还款/退款）
                 if transaction.isCreditTransaction {
-                    Text(AppConstants.Transaction.creditTransactionLabel)
-                        .font(.caption2.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Color.orange)
-                        .cornerRadius(3)
+                    // 如果是“返现”类型，显示“返现CR”，且颜色不同
+                    if transaction.paymentMethod == AppConstants.Transaction.cashbackRebate {
+                        Text("返现CR")
+                            .font(.caption2.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.green) // 返现用绿色背景
+                            .cornerRadius(3)
+                    } else {
+                        // 普通 CR (退款/还款)
+                        Text(AppConstants.Transaction.creditTransactionLabel)
+                            .font(.caption2.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.orange) // 普通CR用橙色
+                            .cornerRadius(3)
+                    }
                 }
             }
             
@@ -85,10 +97,10 @@ private extension TransactionRow {
     
     var amountInfoView: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            // 消费金额（CR 交易显示橙色）
+            // 消费金额（CR 交易显示橙色，返现显示绿色）
             Text(amountString)
                 .fontWeight(.bold)
-                .foregroundColor(transaction.isCreditTransaction ? .orange : .primary)
+                .foregroundColor(amountColor)
                 .monospacedDigit() // 数字等宽显示
             
             // 日期 + 返现信息
@@ -101,7 +113,7 @@ private extension TransactionRow {
                 if shouldShowCashback {
                     Text(cashbackString)
                         .font(.caption2)
-                        .foregroundColor(transaction.isCreditTransaction ? .orange : .green)
+                        .foregroundColor(cashbackTextColor)
                         .monospacedDigit()
                 }
             }
@@ -113,10 +125,30 @@ private extension TransactionRow {
 
 private extension TransactionRow {
     
+    var isRebate: Bool {
+        transaction.paymentMethod == AppConstants.Transaction.cashbackRebate
+    }
+    
     var rowBackground: Color {
-        transaction.isCreditTransaction 
-            ? Color.orange.opacity(0.05) 
-            : Color(uiColor: .secondarySystemGroupedBackground)
+        if isRebate {
+            return Color.green.opacity(0.05) // 返现交易用淡绿色背景
+        } else if transaction.isCreditTransaction {
+            return Color.orange.opacity(0.05) // 其他 CR 交易用淡橙色
+        } else {
+            return Color(uiColor: .secondarySystemGroupedBackground)
+        }
+    }
+    
+    var amountColor: Color {
+        if isRebate { return .green }
+        if transaction.isCreditTransaction { return .orange }
+        return .primary
+    }
+    
+    var cashbackTextColor: Color {
+        if isRebate { return .green }
+        if transaction.isCreditTransaction { return .orange }
+        return .green
     }
     
     var cardDisplayName: String? {
@@ -130,7 +162,10 @@ private extension TransactionRow {
     }
     
     var shouldShowCashback: Bool {
-        transaction.isCreditTransaction || transaction.cashbackamount > 0
+        // 如果是“返现”交易，不显示底部的返现金额行（因为主金额就是返现）
+        if isRebate { return false }
+        
+        return transaction.isCreditTransaction || transaction.cashbackamount > 0
     }
     
     var cashbackString: String {

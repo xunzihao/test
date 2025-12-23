@@ -13,6 +13,9 @@ struct AddTransactionToStatementView: View {
     let onAdd: (StatementAnalysisResult.ParsedTransaction) -> Void
     let onCancel: () -> Void
     
+    // 编辑模式参数
+    var transactionToEdit: StatementAnalysisResult.ParsedTransaction?
+    
     // 表单状态
     @State private var merchantName: String = ""
     @State private var amount: Double = 0.0
@@ -27,6 +30,22 @@ struct AddTransactionToStatementView: View {
     
     enum Field {
         case merchant, amount, cbf
+    }
+    
+    init(transactionToEdit: StatementAnalysisResult.ParsedTransaction? = nil, onAdd: @escaping (StatementAnalysisResult.ParsedTransaction) -> Void, onCancel: @escaping () -> Void) {
+        self.transactionToEdit = transactionToEdit
+        self.onAdd = onAdd
+        self.onCancel = onCancel
+        
+        if let t = transactionToEdit {
+            _merchantName = State(initialValue: t.description)
+            _amount = State(initialValue: t.billingAmount)
+            _cbfFee = State(initialValue: t.cbfFee)
+            _postDate = State(initialValue: t.postDate ?? Date())
+            _transDate = State(initialValue: t.transDate ?? Date())
+            _paymentMethod = State(initialValue: t.paymentMethod ?? AppConstants.OCR.sale)
+            _showCBFInput = State(initialValue: t.cbfFee != nil && t.cbfFee! > 0)
+        }
     }
     
     var body: some View {
@@ -47,7 +66,7 @@ struct AddTransactionToStatementView: View {
                 
                 InfoSection()
             }
-            .navigationTitle(AppConstants.Transaction.addTransactionAction)
+            .navigationTitle(transactionToEdit == nil ? AppConstants.Transaction.addTransactionAction : AppConstants.Transaction.editTransaction)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -55,8 +74,8 @@ struct AddTransactionToStatementView: View {
                 }
                 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(AppConstants.Transaction.add, action: addTransaction)
-                        .disabled(merchantName.isEmpty || amount <= 0)
+                    Button(transactionToEdit == nil ? AppConstants.Transaction.add : AppConstants.General.save, action: addTransaction)
+                        .disabled(merchantName.isEmpty || amount == 0) // 允许负数，只要不是 0 即可
                 }
                 
                 ToolbarItemGroup(placement: .keyboard) {
@@ -124,42 +143,46 @@ private struct AmountSection: View {
                     .foregroundColor(.secondary)
                     .fontWeight(.medium)
                 TextField(AppConstants.StatementAnalysis.amountField, value: $amount, format: .number.precision(.fractionLength(2)))
-                    .keyboardType(.decimalPad)
+                    .keyboardType(.numbersAndPunctuation) // 允许输入负号
                     .multilineTextAlignment(.trailing)
                     .focused(focusedField, equals: .amount)
             }
             
             // CBF 费用
-            if showCBFInput {
-                HStack {
-                    Text(AppConstants.StatementAnalysis.cbfFeeLabel)
-                        .foregroundColor(.orange)
-                    TextField(AppConstants.StatementAnalysis.cbfField, value: Binding(
-                        get: { cbfFee ?? 0 },
-                        set: { cbfFee = $0 > 0 ? $0 : nil }
-                    ), format: .number.precision(.fractionLength(2)))
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .focused(focusedField, equals: .cbf)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                
-                Button(role: .destructive) {
-                    withAnimation {
-                        cbfFee = nil
-                        showCBFInput = false
+            // 使用 ZStack 确保布局稳定，不会因为 showCBFInput 切换而跳动
+            // 或者始终渲染结构，只是用 opacity 或 hidden 控制
+            
+            Group {
+                if showCBFInput {
+                    HStack {
+                        Text(AppConstants.StatementAnalysis.cbfFeeLabel)
+                            .foregroundColor(.orange)
+                        TextField(AppConstants.StatementAnalysis.cbfField, value: Binding(
+                            get: { cbfFee ?? 0 },
+                            set: { cbfFee = $0 > 0 ? $0 : nil }
+                        ), format: .number.precision(.fractionLength(2)))
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .focused(focusedField, equals: .cbf)
                     }
-                } label: {
-                    Label(AppConstants.Transaction.removeCBFFee, systemImage: "minus.circle")
-                }
-            } else {
-                Button {
-                    withAnimation {
-                        showCBFInput = true
-                        cbfFee = 0.0
+                    
+                    Button(role: .destructive) {
+                        withAnimation {
+                            cbfFee = nil
+                            showCBFInput = false
+                        }
+                    } label: {
+                        Label(AppConstants.Transaction.removeCBFFee, systemImage: "minus.circle")
                     }
-                } label: {
-                    Label(AppConstants.StatementAnalysis.addCbfFeeAction, systemImage: "plus.circle")
+                } else {
+                    Button {
+                        withAnimation {
+                            showCBFInput = true
+                            cbfFee = 0.0
+                        }
+                    } label: {
+                        Label(AppConstants.StatementAnalysis.addCbfFeeAction, systemImage: "plus.circle")
+                    }
                 }
             }
         }
@@ -181,21 +204,17 @@ private struct DateSection: View {
 private struct PaymentMethodSection: View {
     @Binding var paymentMethod: String
     
-    private let methods = [
-        AppConstants.OCR.sale,
-        AppConstants.Transaction.applePay,
-        AppConstants.Transaction.unionPayQR,
-        AppConstants.Transaction.refund,
-        AppConstants.Transaction.repayment,
-        AppConstants.OCR.autoRepayment,
-        AppConstants.OCR.instalment,
-        AppConstants.Transaction.cbf
-    ]
+    private var filterOptions: [String] {
+        var options = [AppConstants.OCR.sale] // 默认 SALE 放第一位
+        options.append(contentsOf: AppConstants.OCR.PaymentDetection.candidates)
+        print("options👂",options)
+        return options
+    }
     
     var body: some View {
         Section(AppConstants.StatementAnalysis.paymentMethodField) {
             Picker(AppConstants.StatementAnalysis.paymentMethodField, selection: $paymentMethod) {
-                ForEach(methods, id: \.self) { method in
+                ForEach(filterOptions, id: \.self) { method in
                     Text(method).tag(method)
                 }
             }
@@ -215,11 +234,4 @@ private struct InfoSection: View {
             }
         }
     }
-}
-
-#Preview {
-    AddTransactionToStatementView(
-        onAdd: { _ in },
-        onCancel: { }
-    )
 }

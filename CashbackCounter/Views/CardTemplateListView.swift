@@ -57,30 +57,13 @@ private struct TemplateRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // 卡片图标/图片
-            AsyncImage(url: URL(string: template.pictureURL ?? "")) { phase in
-                if let image = phase.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else if phase.error != nil {
-                    Image(systemName: "creditcard.fill")
-                        .foregroundColor(.gray)
-                } else {
-                    // 加载中或无 URL
-                    if template.pictureURL == nil {
-                        Image(systemName: "creditcard")
-                            .foregroundColor(.gray)
-                    } else {
-                        ProgressView()
-                    }
-                }
-            }
-            .frame(width: 50, height: 32)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-            )
+            CachedTemplateImage(urlString: template.pictureURL)
+                .frame(width: 50, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                )
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(template.bankName)
@@ -98,6 +81,37 @@ private struct TemplateRow: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle()) // 扩大点击区域
+    }
+}
+
+private struct CachedTemplateImage: View {
+    let urlString: String?
+    @StateObject private var downloader = ImageDownloadManager()
+    
+    var body: some View {
+        Group {
+            if let image = downloader.downloadedImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if downloader.errorMessage != nil {
+                Image(systemName: "creditcard.fill")
+                    .foregroundColor(.gray)
+            } else {
+                // 加载中或无 URL
+                if urlString == nil {
+                    Image(systemName: "creditcard")
+                        .foregroundColor(.gray)
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+        .task {
+            if let url = urlString {
+                await downloader.downloadImage(from: url)
+            }
+        }
     }
 }
 
