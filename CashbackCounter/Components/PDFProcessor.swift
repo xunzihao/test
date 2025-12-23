@@ -41,13 +41,15 @@ class PDFProcessor {
             var images: [UIImage] = []
             
             for pageIndex in 0..<pageCount {
-                guard let page = document.page(at: pageIndex) else {
-                    logger.warning("⚠️ 无法获取第 \(pageIndex + 1) 页")
-                    continue
-                }
-                
-                if let image = renderPage(page, pageIndex: pageIndex) {
-                    images.append(image)
+                autoreleasepool {
+                    guard let page = document.page(at: pageIndex) else {
+                        logger.warning("⚠️ 无法获取第 \(pageIndex + 1) 页")
+                        return
+                    }
+                    
+                    if let image = renderPage(page, pageIndex: pageIndex) {
+                        images.append(image)
+                    }
                 }
             }
             
@@ -61,12 +63,24 @@ class PDFProcessor {
         // 获取页面的尺寸
         let pageRect = page.bounds(for: .mediaBox)
         
-        // 设置渲染比例（2.0x 提高清晰度，用于 OCR）
-        let scale: CGFloat = 2.0
+        // 动态计算缩放比例，限制最大尺寸以节省内存
+        // A4 (595x842) @ 2x = 1190x1684 (约 2MP)
+        // 限制最大边长为 2500px (约 6MP)，足够 OCR 使用
+        let maxDimension: CGFloat = 2500.0
+        let currentMax = max(pageRect.width, pageRect.height)
+        var scale: CGFloat = 2.0
+        
+        if currentMax * scale > maxDimension {
+            scale = maxDimension / currentMax
+            // 保持至少 1.0
+            scale = max(scale, 1.0)
+        }
+        
         let scaledSize = CGSize(
             width: pageRect.width * scale,
             height: pageRect.height * scale
         )
+
         
         // 创建图片上下文
         let renderer = UIGraphicsImageRenderer(size: scaledSize)

@@ -51,6 +51,9 @@ struct AddCardView: View {
     private let templatePictureURL: String?
     @State private var hasDownloadedTemplateImage = false
     
+    // Sheet State
+    @State private var activeCashbackSheet: ActiveMultiSelectSheet?
+    
     // 焦点管理
     @FocusState private var focusedField: Field?
     
@@ -129,6 +132,7 @@ struct AddCardView: View {
 
                 BaseCashbackSection(
                     conditions: $baseCashbackConditions,
+                    activeSheet: $activeCashbackSheet,
                     focusedField: $focusedField
                 )
 
@@ -187,6 +191,9 @@ struct AddCardView: View {
             }
             .onChange(of: imageToEdit) { _, newValue in
                 if newValue != nil { showImageCropper = true }
+            }
+            .sheet(item: $activeCashbackSheet) { sheet in
+                MultiSelectSheetWrapper(sheet: sheet, conditions: $baseCashbackConditions)
             }
         }
     }
@@ -479,10 +486,8 @@ private struct BasicInfoSection: View {
 
 private struct BaseCashbackSection: View {
     @Binding var conditions: [AddCardView.BaseCashbackCondition]
+    @Binding var activeSheet: AddCardView.ActiveMultiSelectSheet?
     var focusedField: FocusState<AddCardView.Field?>.Binding
-    
-    // 用于内部控制 sheet 显示
-    @State private var activeSheet: AddCardView.ActiveMultiSelectSheet?
     
     var body: some View {
         Section(header: Text(AppConstants.Card.baseCashbackAll)) {
@@ -518,9 +523,6 @@ private struct BaseCashbackSection: View {
                     Text(AppConstants.Card.addCondition)
                 }
             }
-        }
-        .sheet(item: $activeSheet) { sheet in
-            MultiSelectSheetWrapper(sheet: sheet, conditions: $conditions)
         }
     }
 }

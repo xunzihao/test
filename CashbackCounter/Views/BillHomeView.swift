@@ -27,6 +27,7 @@ struct BillHomeView: View {
     @State private var showCardPicker = false
     @State private var showTrendSheet = false
     @State private var showExpenseSheet = false
+    @State private var showAddCashbackSheet = false
     
     // Filter State
     @State private var selectedDate = Date()
@@ -138,6 +139,14 @@ struct BillHomeView: View {
             .navigationTitle(AppConstants.General.appName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAddCashbackSheet = true
+                    } label: {
+                        Label("添加返现", systemImage: "plus.circle")
+                    }
+                }
+                
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if !filteredTransactions.isEmpty {
@@ -185,6 +194,9 @@ struct BillHomeView: View {
             }
             .sheet(isPresented: $showExpenseSheet) {
                 TrendAnalysisView(transactions: dbTransactions, cards: cards, exchangeRates: exchangeRates, type: .expense)
+            }
+            .sheet(isPresented: $showAddCashbackSheet) {
+                AddCashbackView()
             }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
                 handleImport(result)
@@ -288,7 +300,7 @@ private struct StatsHeader: View {
         HStack(spacing: 15) {
             StatsButton(
                 title: "\(titlePrefix)\(AppConstants.Trend.expense)",
-                amount: expenseStrings.joined(separator: "  "),
+                amount: expenseStrings.joined(separator: "\n"),
                 icon: "arrow.down.circle.fill",
                 color: .red,
                 action: onExpenseTap
@@ -296,7 +308,7 @@ private struct StatsHeader: View {
             
             StatsButton(
                 title: "\(titlePrefix)\(AppConstants.Trend.cashback)",
-                amount: cashbackStrings.joined(separator: "  "),
+                amount: cashbackStrings.joined(separator: "\n"),
                 icon: "arrow.up.circle.fill",
                 color: .green,
                 action: onCashbackTap

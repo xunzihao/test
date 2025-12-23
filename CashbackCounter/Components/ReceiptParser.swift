@@ -7,7 +7,9 @@
 import FoundationModels
 import Observation // 苹果的新状态管理框架
 import Foundation
+import OSLog
 
+private let logger = Logger(subsystem: "CashbackCounter", category: "ReceiptParser")
 
 @MainActor
 @Observable
@@ -21,34 +23,32 @@ final class ReceiptParser {
     
     // 3. 解析方法
     func parse(text: String) async throws -> ReceiptMetadata {
-            
-            // 👇👇👇 核心修改：每次调用 parse 时，创建一个全新的 session！
-            // 这样每次都是“第一次”，没有历史包袱
-            let session = LanguageModelSession(instructions: instructions)
-            
+        // 👇👇👇 核心修改：每次调用 parse 时，创建一个全新的 session！
+        // 这样每次都是“第一次”，没有历史包袱
+        let session = LanguageModelSession(instructions: instructions)
+        print("text", text)
             let response = try await session.respond(
                 generating: ReceiptMetadata.self
             ) {
                 "Analyze this receipt text:"
                 text
             }
-            
-        return response.content
-        }
-    // func SMSparse(text: String) async throws -> ReceiptMetadata {
-            
-    //         // 👇👇👇 核心修改：每次调用 parse 时，创建一个全新的 session！
-    //         // 这样每次都是“第一次”，没有历史包袱
-    //         let session = LanguageModelSession(instructions: SMSinstructions)
-            
-    //         let response = try await session.respond(
-    //             generating: ReceiptMetadata.self
-    //         ) {
-    //             "Analyze this receipt text:"
-    //             text
-    //         }
-            
+            return response.content
+        // func SMSparse(text: String) async throws -> ReceiptMetadata {
+        
+        //         // 👇👇👇 核心修改：每次调用 parse 时，创建一个全新的 session！
+        //         // 这样每次都是“第一次”，没有历史包袱
+        //         let session = LanguageModelSession(instructions: SMSinstructions)
+        
+        //         let response = try await session.respond(
+        //             generating: ReceiptMetadata.self
+        //         ) {
+        //             "Analyze this receipt text:"
+        //             text
+        //         }
+        
         // return response.content
         // }
-    
+        
+    }
 }

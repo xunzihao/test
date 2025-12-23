@@ -47,7 +47,8 @@ struct OCRService {
         ]
         
         let firstPassText = await recognizeText(from: image, languages: broadLanguages)
-        logger.debug("📝 第一轮 OCR 结果长度: \(firstPassText.count)")
+        logger.debug("第一轮 OCR 结果: \(firstPassText)")
+        logger.debug("第一轮 OCR 结果长度: \(firstPassText.count)")
         
         // 2. ⚡️ 本地快速推断 (不调 AI，只查关键词)
         let detectedRegion = simpleInferRegion(from: firstPassText)
@@ -56,17 +57,23 @@ struct OCRService {
         var finalText = firstPassText
         
         // 3. 决策：需要重扫吗？
+        // 如果第一轮识别出的文本太短，或者置信度太低，也可以考虑不重扫，直接给 AI（或者报错）
         if let targetRegion = detectedRegion {
             let optimizedLanguages = getLanguages(for: targetRegion)
             // 只有当优化后的语言列表跟通用列表不一样时，才值得重扫
             if optimizedLanguages != broadLanguages {
                 logger.info("🔄 启动第二轮：针对 \(targetRegion.rawValue) 的精准识别...")
-                finalText = await recognizeText(from: image, languages: optimizedLanguages)
+                let secondPassText = await recognizeText(from: image, languages: optimizedLanguages)
+                finalText = secondPassText
             }
         }
         
         // 4. 最终只调用一次 AI
-        logger.info("🤖 以此文本请求 AI 分析...")
+        // 如果文本还是空的，没必要调 AI 了
+        guard !finalText.isEmpty else {
+            logger.error("❌ OCR 最终结果为空，跳过 AI 分析")
+            return nil
+        }
         let metadata = try? await aiParser.parse(text: finalText)
         
         // 5. 🧮 后处理：如果有汇率，智能计算缺失的金额
@@ -86,39 +93,42 @@ struct OCRService {
         
         let orientation = cgImageOrientation(from: image.imageOrientation)
         
-        return try await withCheckedThrowingContinuation { continuation in
-            let requestHandler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
-            let request = VNRecognizeTextRequest { request, error in
-                if let error = error {
-                    logger.error("Vision 请求内部错误: \(error.localizedDescription)")
-                    continuation.resume(throwing: error)
-                    return
+        // 将繁重的 Vision 请求移至后台线程，避免阻塞主线程
+        return try await Task.detached(priority: .userInitiated) {
+            return try await withCheckedThrowingContinuation { continuation in
+                let requestHandler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
+                let request = VNRecognizeTextRequest { request, error in
+                    if let error = error {
+                        logger.error("Vision 请求内部错误: \(error.localizedDescription)")
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    
+                    guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                        logger.warning("未识别到任何文本 Observation")
+                        continuation.resume(returning: [])
+                        return
+                    }
+                    continuation.resume(returning: observations)
                 }
                 
-                guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    logger.warning("未识别到任何文本 Observation")
-                    continuation.resume(returning: [])
-                    return
+                // 🆕 Use latest revision for better accuracy (iOS 16+)
+                if #available(iOS 16.0, *) {
+                    request.revision = VNRecognizeTextRequestRevision3
                 }
-                continuation.resume(returning: observations)
+                
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = languages
+                request.usesLanguageCorrection = true
+                
+                do {
+                    try requestHandler.perform([request])
+                } catch {
+                    logger.error("Vision Handler 执行失败: \(error.localizedDescription)")
+                    continuation.resume(throwing: error)
+                }
             }
-            
-            // 🆕 Use latest revision for better accuracy (iOS 16+)
-            if #available(iOS 16.0, *) {
-                request.revision = VNRecognizeTextRequestRevision3
-            }
-            
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = languages
-            request.usesLanguageCorrection = true
-            
-            do {
-                try requestHandler.perform([request])
-            } catch {
-                logger.error("Vision Handler 执行失败: \(error.localizedDescription)")
-                continuation.resume(throwing: error)
-            }
-        }
+        }.value
     }
     
     // MARK: - 结构化数据重建 (核心抽象)
@@ -218,25 +228,30 @@ struct OCRService {
         
         logger.info("💱 检测到汇率: \(rate)")
         
+        // 📊 输出识别结果摘要
+        logger.info("📋 AI 识别摘要:")
+        if let amt = result.spendingAmount, let curr = result.currency {
+            logger.info("  • 消费金额: \(amt) \(curr)")
+        }
+        if let billingAmt = result.billingAmount, let billingCurr = result.billingCurrency {
+            logger.info("  • 入账金额: \(billingAmt) \(billingCurr)")
+        }
+        
         // 场景 A：有外币 + 汇率，但没有记账金额 → 计算记账金额
-        if let foreign = result.totalAmount, foreign > 0, result.billingAmount == nil {
+        if let foreign = result.spendingAmount, foreign > 0, result.billingAmount == nil {
             let calculated = foreign * rate
             result.billingAmount = calculated
             logger.info("✅ 根据汇率计算记账金额: \(foreign) × \(rate) = \(calculated)")
         }
-        // 场景 B：有记账金额 + 汇率，但没有外币 → 反向计算外币
-        else if let billing = result.billingAmount, billing > 0, result.totalAmount == nil {
-            let calculated = billing / rate
-            result.totalAmount = calculated
-            logger.info("✅ 根据汇率反向计算外币金额: \(billing) ÷ \(rate) = \(calculated)")
-        }
-        // 场景 C：三者都有 → 验证一致性
-        else if let foreign = result.totalAmount, let billing = result.billingAmount {
+        // 场景 B：三者都有 → 验证一致性
+        else if let foreign = result.spendingAmount, let billing = result.billingAmount {
             let expectedBilling = foreign * rate
             let tolerance = 0.02 // 允许 2 分钱误差（汇率四舍五入）
             if abs(billing - expectedBilling) > tolerance {
                 logger.warning("⚠️ 汇率不匹配：外币 \(foreign) × 汇率 \(rate) = \(expectedBilling)，但记账金额为 \(billing)")
                 logger.warning("📋 以小票实际显示为准")
+            } else {
+                logger.info("✅ 汇率验证通过：\(foreign) × \(rate) ≈ \(billing)")
             }
         }
         
@@ -338,10 +353,10 @@ struct OCRService {
         let zhHant = AppConstants.Languages.zhHant
         
         switch region {
-        case .jp: return [jaJP, enUS, zhHans] // 日本：必须把 ja-JP 放第一
-        case .cn: return [zhHans, enUS, jaJP] // 简中区
-        case .hk, .tw: return [zhHant, enUS, jaJP] // 繁中区
-        case .us, .nz, .other: return [enUS, zhHans, jaJP] // 英语区
+        case .jp: return [jaJP, enUS] // 日本：必须把 ja-JP 放第一
+        case .cn: return [zhHans, enUS] // 简中区
+        case .hk, .tw: return [zhHant, enUS] // 繁中区
+        case .us, .nz, .other: return [enUS] // 英语区
         }
     }
 }

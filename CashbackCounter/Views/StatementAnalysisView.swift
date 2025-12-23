@@ -43,9 +43,15 @@ struct StatementAnalysisView: View {
     @State private var isCalculatingCashback = false
     
     // Editing / Adding Transactions
-    @State private var editingTransactionIndex: Int? = nil
-    @State private var showEditSheet = false
+    @State private var editingConfig: EditingTransactionConfig?
     @State private var showAddSheet = false
+    
+    // Helper struct for editing
+    private struct EditingTransactionConfig: Identifiable {
+        let id = UUID()
+        let index: Int
+        let transaction: StatementAnalysisResult.ParsedTransaction
+    }
     
     // Analyzer
     private let analyzer = StatementAnalyzer()
@@ -61,7 +67,9 @@ struct StatementAnalysisView: View {
                         image: image,
                         pdfImages: pdfImages,
                         onSelectPage: { selectedImage = $0 },
-                        onReset: resetSelection,
+                        onReset: {
+                            withAnimation { resetSelection() }
+                        },
                         onChoosePDF: { showPDFPicker = true }
                     )
                     
@@ -77,8 +85,9 @@ struct StatementAnalysisView: View {
                             isCalculatingCashback: isCalculatingCashback,
                             onSelectCard: { showCardPicker = true },
                             onEditTransaction: { index in
-                                editingTransactionIndex = index
-                                showEditSheet = true
+                                if let result = analysisResult, result.transactions.indices.contains(index) {
+                                    editingConfig = EditingTransactionConfig(index: index, transaction: result.transactions[index])
+                                }
                             },
                             onDeleteTransaction: deleteTransaction,
                             onAddTransaction: { showAddSheet = true }
@@ -100,11 +109,26 @@ struct StatementAnalysisView: View {
                         onSelectImage: { showImagePicker = true },
                         onSelectPDF: { showPDFPicker = true }
                     )
+                    // 确保空状态也应用相同的过渡，使其在切换时能够平滑衔接
+                    .transition(.move(edge: .leading))
                 }
             }
+            // 将动画应用到整个 VStack 内容的变化上
+            .animation(.easeInOut(duration: 0.3), value: selectedImage != nil)
             .navigationTitle(AppConstants.StatementAnalysis.monthlyStatementAnalysis)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if selectedImage != nil {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: {
+                            withAnimation { resetSelection() }
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .font(.body.weight(.semibold))
+                        }
+                    }
+                }
+                
                 if analysisResult != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button(AppConstants.StatementAnalysis.importAction) { importTransactions() }
@@ -122,19 +146,15 @@ struct StatementAnalysisView: View {
             .sheet(isPresented: $showCardPicker) {
                 StatementCardPickerView(cards: cards, selected: $matchedCard)
             }
-            .sheet(isPresented: $showEditSheet) {
-                if let index = editingTransactionIndex,
-                   let result = analysisResult,
-                   result.transactions.indices.contains(index) {
-                    StatementEditTransactionView(
-                        transaction: result.transactions[index],
-                        onSave: { updatedTrans in
-                            updateTransaction(at: index, with: updatedTrans)
-                            showEditSheet = false
-                        },
-                        onCancel: { showEditSheet = false }
-                    )
-                }
+            .sheet(item: $editingConfig) { config in
+                StatementEditTransactionView(
+                    transaction: config.transaction,
+                    onSave: { updatedTrans in
+                        updateTransaction(at: config.index, with: updatedTrans)
+                        editingConfig = nil
+                    },
+                    onCancel: { editingConfig = nil }
+                )
             }
             .sheet(isPresented: $showAddSheet) {
                 NavigationStack {
@@ -183,7 +203,8 @@ struct StatementAnalysisView: View {
         pdfImages = []
         totalPages = 0
         selectedPDFURL = nil
-        showImagePicker = true
+        selectedImage = nil // 关键：清空 selectedImage 才能回到初始状态
+        // showImagePicker = true // ⚠️ 删除这行：不要自动弹出 Picker
     }
     
     private func resetAnalysisState() {
@@ -267,7 +288,11 @@ struct StatementAnalysisView: View {
             await MainActor.run { currentAnalyzingPage = index + 1 }
             
             do {
-                let croppedImage = StatementImageProcessor.cropTransactionTable(from: image)
+                let currentImage = image // Capture for closure
+                let croppedImage = await Task.detached(priority: .userInitiated) {
+                    return StatementImageProcessor.cropTransactionTable(from: currentImage)
+                }.value
+                
                 let pageResult = try await analyzer.analyze(image: croppedImage)
                 
                 allTransactions.append(contentsOf: pageResult.transactions)
@@ -301,7 +326,10 @@ struct StatementAnalysisView: View {
         defer { isAnalyzing = false }
         
         do {
-            let croppedImage = StatementImageProcessor.cropTransactionTable(from: image)
+            let croppedImage = await Task.detached(priority: .userInitiated) {
+                return StatementImageProcessor.cropTransactionTable(from: image)
+            }.value
+            
             let result = try await analyzer.analyze(image: croppedImage)
             
             await MainActor.run {
@@ -337,22 +365,23 @@ struct StatementAnalysisView: View {
             }
             
             let paymentMethod = TransactionHelpers.normalizePaymentMethod(transaction.paymentMethod ?? "SALE")
-            let sourceCurrency = transaction.cashbackCurrency
-            let amount = abs(transaction.amount)
+            let cashbackCurrency = transaction.cashbackCurrency
+            let amount = abs(transaction.billingAmount)
+            let date = transaction.transDate ?? transaction.postDate ?? Date()
             
             let calcResult = await CashbackService.calculateCashbackWithDetails(
                 card: card,
-                originalAmount: amount,
-                sourceCurrency: sourceCurrency,
+                spendingAmount: amount,
+                spendingCurrencyCode: cashbackCurrency,
                 paymentMethod: paymentMethod,
                 isOnlineShopping: false,
                 isCBFApplied: false,
                 category: Category.other,
                 location: Region.hk,
-                date: transaction.transDate ?? transaction.postDate ?? Date(),
+                date: date,
                 selectedConditionIndex: nil,
                 transactionToExclude: nil,
-                providedBillingAmount: amount
+                billingAmount: amount
             )
             
             results[index] = calcResult.finalCashback
@@ -376,22 +405,23 @@ struct StatementAnalysisView: View {
         }
         
         let paymentMethod = TransactionHelpers.normalizePaymentMethod(transaction.paymentMethod ?? "SALE")
-        let sourceCurrency = transaction.cashbackCurrency
-        let amount = abs(transaction.amount)
+        let cashbackCurrency = transaction.cashbackCurrency
+        let billingAmount = abs(transaction.billingAmount)
+        let date = transaction.transDate ?? transaction.postDate ?? Date()
         
         let calcResult = await CashbackService.calculateCashbackWithDetails(
             card: card,
-            originalAmount: amount,
-            sourceCurrency: sourceCurrency,
+            spendingAmount: billingAmount,
+            spendingCurrencyCode: cashbackCurrency,
             paymentMethod: paymentMethod,
             isOnlineShopping: false,
             isCBFApplied: false,
             category: Category.other,
             location: Region.hk,
-            date: transaction.transDate ?? transaction.postDate ?? Date(),
+            date: date,
             selectedConditionIndex: nil,
             transactionToExclude: nil,
-            providedBillingAmount: amount
+            billingAmount: billingAmount
         )
         
         await MainActor.run {
@@ -437,24 +467,26 @@ struct StatementAnalysisView: View {
         var successCount = 0
         
         for (index, parsedTrans) in result.transactions.enumerated() {
-            if parsedTrans.paymentMethod == "CBF" || parsedTrans.amount == 0 { continue }
+            if parsedTrans.paymentMethod == "CBF" || parsedTrans.billingAmount == 0 { continue }
             
             let isCreditTransaction = parsedTrans.isRefundOrPayment
-            let absAmount = abs(parsedTrans.amount)
+            let absAmount = abs(parsedTrans.billingAmount)
             let detectedPaymentMethod = TransactionHelpers.normalizePaymentMethod(parsedTrans.paymentMethod ?? "SALE")
             let calculatedCashback = cashbackResults[index] ?? 0.0
             let cbfFee = parsedTrans.cbfFee ?? 0.0
+            let date = parsedTrans.transDate ?? parsedTrans.postDate ?? Date()
+            let isCBFApplied = cbfFee > 0
             
             let transaction = Transaction(
                 merchant: parsedTrans.description,
                 category: Category.other,
                 location: Region.hk,
-                amount: absAmount,
-                date: parsedTrans.transDate ?? parsedTrans.postDate ?? Date(),
+                spendingAmount: absAmount,
+                date: date,
                 card: card,
                 paymentMethod: detectedPaymentMethod,
                 isOnlineShopping: true, // Default to true, can be edited later
-                isCBFApplied: cbfFee > 0,
+                isCBFApplied: isCBFApplied,
                 isCreditTransaction: isCreditTransaction,
                 receiptData: nil,
                 billingAmount: absAmount,
@@ -469,12 +501,15 @@ struct StatementAnalysisView: View {
         do {
             try context.save()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                // Reset to home state
-                selectedImage = nil
-                pdfImages = []
-                totalPages = 0
-                selectedPDFURL = nil
-                resetAnalysisState()
+                // 使用 withAnimation 包裹状态重置，让返回过程更平滑
+                withAnimation(.easeInOut) {
+                    // Reset to home state
+                    selectedImage = nil
+                    pdfImages = []
+                    totalPages = 0
+                    selectedPDFURL = nil
+                    resetAnalysisState()
+                }
             }
         } catch {
             errorMessage = String(format: AppConstants.General.importFailed, error.localizedDescription)
@@ -495,43 +530,54 @@ private struct StatementImageSelectionView: View {
         } description: {
             Text(AppConstants.StatementAnalysis.selectImageOrPDF)
         } actions: {
-            VStack(spacing: 12) {
+            VStack(spacing: 16) {
                 Button(action: onSelectImage) {
                     Label(AppConstants.StatementAnalysis.selectFromPhotoLibrary, systemImage: "photo.on.rectangle")
                         .frame(maxWidth: .infinity)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(12)
                 }
-                .buttonStyle(.borderedProminent)
+//                .buttonStyle(.borderedProminent)
                 
                 Button(action: onSelectPDF) {
                     Label(AppConstants.StatementAnalysis.selectPDFFile, systemImage: "doc.fill")
                         .frame(maxWidth: .infinity)
+                        .font(.headline)
+                        .foregroundColor(.blue)
+                        .padding()
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(12)
                 }
-                .buttonStyle(.bordered)
+//                .buttonStyle(.bordered)
             }
-            .frame(maxWidth: 300)
-            .padding(.top)
+//            .frame(maxWidth: 300)
+            .padding(.horizontal)
         }
     }
 }
 
 private struct StatementImagePreviewView: View {
-    let image: UIImage
-    let pdfImages: [UIImage]
-    let onSelectPage: (UIImage) -> Void
-    let onReset: () -> Void
-    let onChoosePDF: () -> Void
-    
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 300)
-                    .cornerRadius(12)
-                    .shadow(radius: 4)
-                
-                if !pdfImages.isEmpty {
+        let image: UIImage
+        let pdfImages: [UIImage]
+        let onSelectPage: (UIImage) -> Void
+        let onReset: () -> Void
+        let onChoosePDF: () -> Void
+        
+        var body: some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 300)
+                        .cornerRadius(12)
+                        .shadow(radius: 4)
+                        .frame(maxWidth: .infinity) // 居中显示
+                    
+                    if !pdfImages.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(String(format: AppConstants.StatementAnalysis.allPages, pdfImages.count))
                             .font(.headline)
@@ -555,18 +601,18 @@ private struct StatementImagePreviewView: View {
                 }
                 
                 HStack(spacing: 12) {
-                    Button(action: onReset) {
-                        Label(AppConstants.StatementAnalysis.reselectImage, systemImage: "photo")
-                            .frame(maxWidth: .infinity)
+                        Button(action: onReset) {
+                            Label(AppConstants.StatementAnalysis.reselectImage, systemImage: "photo")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        
+                        Button(action: onChoosePDF) {
+                            Label(AppConstants.StatementAnalysis.reselectPDF, systemImage: "doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                    
-                    Button(action: onChoosePDF) {
-                        Label(AppConstants.StatementAnalysis.reselectPDF, systemImage: "doc")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
             }
             .padding()
         }
@@ -779,9 +825,9 @@ private struct StatementTransactionRow: View {
                 Text(transaction.description).font(.subheadline).lineLimit(2)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(String(format: "%.2f", transaction.amount))
+                    Text(String(format: "%.2f", transaction.billingAmount))
                         .font(.subheadline).fontWeight(.semibold)
-                        .foregroundColor(transaction.amount >= 0 ? .primary : .green)
+                        .foregroundColor(transaction.billingAmount >= 0 ? .primary : .green)
                     
                     if let cbfFee = transaction.cbfFee {
                         Text("+ CBF \(String(format: "%.2f", cbfFee))").font(.caption2).foregroundColor(.orange)
@@ -869,7 +915,7 @@ private struct StatementEditTransactionView: View {
                 Section(AppConstants.StatementAnalysis.transactionAmountSection) {
                     HStack {
                         Text(AppConstants.StatementAnalysis.currencyHKD).foregroundColor(.secondary)
-                        TextField(AppConstants.StatementAnalysis.amountField, value: $transaction.amount, format: .number.precision(.fractionLength(2)))
+                        TextField(AppConstants.StatementAnalysis.amountField, value: $transaction.billingAmount, format: .number.precision(.fractionLength(2)))
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
@@ -922,8 +968,8 @@ private struct StatementEditTransactionView: View {
                 
                 if transaction.isForeignCurrency {
                     Section(AppConstants.Transaction.foreignCurrencyInfo) {
-                        LabeledContent(AppConstants.Transaction.foreignCurrencyType, value: transaction.foreignCurrency ?? "N/A")
-                        if let amount = transaction.foreignAmount {
+                        LabeledContent(AppConstants.Transaction.foreignCurrencyType, value: transaction.spendingCurrency ?? "N/A")
+                        if let amount = transaction.spendingAmount {
                             LabeledContent(AppConstants.Transaction.foreignCurrencyAmount, value: String(format: "%.2f", amount))
                         }
                     }

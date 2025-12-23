@@ -7,7 +7,7 @@ class Transaction: Identifiable {
     var category: Category
     var location: Region
     
-    var amount: Double        // 原币金额
+    var spendingAmount: Double        // 原币金额
     var billingAmount: Double // 入账金额
     var cbfAmount: Double = 0.0 // CBF 费用金额（如果适用）
     
@@ -36,7 +36,7 @@ class Transaction: Identifiable {
     init(merchant: String,
          category: Category,
          location: Region,
-         amount: Double,
+         spendingAmount: Double,
          date: Date,
          card: CreditCard?,
          paymentMethod: String = "",
@@ -51,7 +51,7 @@ class Transaction: Identifiable {
         self.merchant = merchant
         self.category = category
         self.location = location
-        self.amount = amount
+        self.spendingAmount = spendingAmount
         self.date = date
         self.card = card
         self.paymentMethod = paymentMethod
@@ -59,10 +59,10 @@ class Transaction: Identifiable {
         self.isCBFApplied = isCBFApplied
         self.isCreditTransaction = isCreditTransaction // 👈 赋值
         self.receiptData = receiptData
-        self.billingAmount = billingAmount ?? amount
+        self.billingAmount = billingAmount ?? spendingAmount
         self.cbfAmount = cbfAmount
         
-        let finalBilling = billingAmount ?? amount
+        let finalBilling = billingAmount ?? spendingAmount
         
         // 1. 记录名义费率 (用于界面显示，比如 "5%")
         // 这里依然调用 getRate，得到的是 "基础+加成" 的理论总费率

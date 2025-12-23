@@ -38,6 +38,40 @@ struct MonthlyData: Identifiable, Equatable {
     let amount: Double
 }
 
+// MARK: - Filter Model
+enum TrendFilter: Identifiable, Hashable {
+    case all
+    case rewardCash
+    case card(CreditCard)
+    
+    var id: String {
+        switch self {
+        case .all: return "all"
+        case .rewardCash: return "rewardCash"
+        case .card(let card): return String(describing: card.id)
+        }
+    }
+    
+    static func == (lhs: TrendFilter, rhs: TrendFilter) -> Bool {
+        switch (lhs, rhs) {
+        case (.all, .all): return true
+        case (.rewardCash, .rewardCash): return true
+        case (.card(let c1), .card(let c2)): return c1.id == c2.id
+        default: return false
+        }
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .all: hasher.combine(0)
+        case .rewardCash: hasher.combine(1)
+        case .card(let card):
+            hasher.combine(2)
+            hasher.combine(card.id)
+        }
+    }
+}
+
 // MARK: - View
 
 struct TrendAnalysisView: View {
@@ -51,13 +85,18 @@ struct TrendAnalysisView: View {
     // 👇 核心：当前分析的类型 (由外部传入)
     let type: TrendType
     
-    @State private var selectedCard: CreditCard? = nil
+    @State private var selectedFilter: TrendFilter = .all
     
     // 缓存计算结果，避免每次视图刷新都重新计算
     @State private var cachedData: [MonthlyData] = []
+    // 当前显示的币种符号
+    @State private var displayCurrencySymbol: String = "CNY"
     
     // ✨ iOS 17+: 图表交互选择
     @State private var rawSelectedDate: Date?
+    
+    // ⚙️ 设置: 0 = 近12个月, 1 = 全部记录
+    @AppStorage(AppConstants.Keys.trendDisplayMode) private var trendDisplayMode: Int = 0
     
     var body: some View {
         NavigationStack {
@@ -65,15 +104,18 @@ struct TrendAnalysisView: View {
                 // --- 1. 图表区域 ---
                 ChartView(
                     type: type,
-                    selectedCard: selectedCard,
+                    selectedFilter: selectedFilter,
                     data: cachedData,
-                    rawSelectedDate: $rawSelectedDate
+                    currencySymbol: displayCurrencySymbol,
+                    rawSelectedDate: $rawSelectedDate,
+                    trendDisplayMode: trendDisplayMode
                 )
                 
                 // --- 2. 卡片选择列表 ---
                 CardSelectionList(
                     cards: cards,
-                    selectedCard: $selectedCard
+                    selectedFilter: $selectedFilter,
+                    type: type
                 )
             }
             .background(Color(uiColor: .systemGroupedBackground))
@@ -85,10 +127,13 @@ struct TrendAnalysisView: View {
                 }
             }
             // 监听数据变化并更新图表
-            .task(id: selectedCard?.id) {
+            .task(id: selectedFilter) {
                 await updateChartData()
             }
             .task(id: transactions.count) {
+                await updateChartData()
+            }
+            .task(id: exchangeRates) {
                 await updateChartData()
             }
             .onAppear {
@@ -101,45 +146,153 @@ struct TrendAnalysisView: View {
     
     @MainActor
     private func updateChartData() async {
-        // 在后台线程计算
-        let result = await Task.detached(priority: .userInitiated) {
-            let calendar = Calendar.current
-            let now = Date()
-            var data: [MonthlyData] = []
-            
-            for i in 0..<12 {
-                if let date = calendar.date(byAdding: .month, value: -i, to: now) {
-                    let components = calendar.dateComponents([.year, .month], from: date)
-                    
-                    // 筛选
-                    let monthlyTransactions = transactions.filter { t in
-                        let tComponents = calendar.dateComponents([.year, .month], from: t.date)
-                        let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
-                        let isCardMatch = (selectedCard == nil) || (t.card?.id == selectedCard?.id)
-                        return isSameMonth && isCardMatch
-                    }
-                    
-                    // 计算总额 (根据类型区分逻辑)
-                    let total = monthlyTransactions.reduce(0.0) { sum, t in
-                        let amountToAdd: Double
-                        // 👇 分支逻辑
-                        if type == .expense {
-                            amountToAdd = t.billingAmount // 支出算入账金额
-                        } else {
-                            amountToAdd = t.cashbackamount // 直接使用存储的返现金额
-                        }
-                        
-                        // 汇率换算
-                        let code = t.card?.issueRegion.currencyCode ?? "CNY"
-                        let rate = exchangeRates[code] ?? 1.0
-                        return sum + (amountToAdd / rate)
-                    }
-                    
-                    data.append(MonthlyData(date: date, amount: total))
-                }
+        let calendar = Calendar.current
+        let now = Date()
+        var data: [MonthlyData] = []
+        
+        // 确定显示币种
+        // 规则：
+        // 1. 如果选中了特定卡片，直接使用该卡片的币种
+        // 2. 如果是"全部"或"奖赏钱"，检查所有相关交易
+        //    - 如果只有一种币种，就用该币种
+        //    - 如果有多种币种，默认换算为 CNY (因为不同币种无法直接在图表叠加)
+        let targetCurrency: String
+        let targetSymbol: String
+        
+        switch selectedFilter {
+        case .card(let card):
+            targetCurrency = card.issueRegion.currencyCode
+            targetSymbol = card.issueRegion.currencySymbol
+        case .all, .rewardCash:
+            // 筛选出所有相关的交易
+            let relevantTransactions: [Transaction]
+            if selectedFilter == .rewardCash {
+                relevantTransactions = transactions.filter { $0.card == nil }
+            } else {
+                relevantTransactions = transactions
             }
-            return data.reversed() as [MonthlyData]
-        }.value
+            
+            // 统计涉及的币种
+            let involvedCurrencies = Set(relevantTransactions.compactMap { $0.card?.issueRegion.currencyCode ?? "CNY" })
+            
+            if involvedCurrencies.count == 1, let first = involvedCurrencies.first {
+                 targetCurrency = first
+                 // 简单映射符号，或者从任一交易/卡片获取。这里简单硬编码常见符号，或者查找对应的 Region
+                 // 更好的方式是找到对应的卡片来获取符号，但这里只有 currencyCode
+                 // 尝试找一个该币种的 transaction 或 card 来获取符号
+                 if let tx = relevantTransactions.first(where: { $0.card?.issueRegion.currencyCode == first }), let card = tx.card {
+                     targetSymbol = card.issueRegion.currencySymbol
+                 } else {
+                    // 如果是奖赏钱账户且只有 CNY，则不显示符号 (满足用户需求: "CN¥这个可以不写")
+                    if selectedFilter == .rewardCash && first == "CNY" {
+                        targetSymbol = ""
+                    } else {
+                        targetSymbol = first == "CNY" ? "CN¥" : (first == "HKD" ? "HK$" : first)
+                    }
+                 }
+             } else {
+                 // 混合币种，默认用 CNY
+                 targetCurrency = "CNY"
+                 targetSymbol = "CN¥"
+             }
+        }
+        
+        self.displayCurrencySymbol = targetSymbol
+        
+        // 确定时间范围
+        let startDate: Date
+        let monthCount: Int
+        
+        if trendDisplayMode == 1 { // 全部记录
+            // 找到最早的交易日期
+            let allRelevantDates = transactions.map { $0.date }
+            if let earliest = allRelevantDates.min() {
+                // 向前取整到月首
+                let components = calendar.dateComponents([.year, .month], from: earliest)
+                startDate = calendar.date(from: components) ?? calendar.date(byAdding: .month, value: -11, to: now)!
+            } else {
+                startDate = calendar.date(byAdding: .month, value: -11, to: now)!
+            }
+            
+            // 计算从 startDate 到 now 的月数差
+            let components = calendar.dateComponents([.month], from: startDate, to: now)
+            monthCount = (components.month ?? 11) + 1
+        } else { // 近12个月
+            startDate = calendar.date(byAdding: .month, value: -11, to: now)!
+            monthCount = 12
+        }
+        
+        // 生成数据
+        for i in 0..<monthCount {
+            // 从现在往前推 i 个月 (这样逻辑和之前相反了，之前是 i=0 是现在)
+            // 之前的逻辑: date = now - i months (i: 0...11) -> 结果是倒序的 (Now...11 months ago)
+            // 然后 reversed() -> (11 months ago ... Now)
+            
+            // 新逻辑: 我们需要覆盖 [startDate, now]
+            // 为了保持和之前一样的倒序生成然后 reverse 的逻辑（或者直接正序生成）
+            // 让我们正序生成吧，更直观
+            
+            if let date = calendar.date(byAdding: .month, value: -(monthCount - 1 - i), to: now) {
+                 let components = calendar.dateComponents([.year, .month], from: date)
+                
+                // 筛选
+                let monthlyTransactions = transactions.filter { t in
+                    let tComponents = calendar.dateComponents([.year, .month], from: t.date)
+                    let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
+                    
+                    let isFilterMatch: Bool
+                    switch selectedFilter {
+                    case .all:
+                        isFilterMatch = true
+                    case .rewardCash:
+                        isFilterMatch = (t.card == nil)
+                    case .card(let card):
+                        isFilterMatch = (t.card?.id == card.id)
+                    }
+                    
+                    return isSameMonth && isFilterMatch && !t.isCreditTransaction
+                }
+                
+                // 计算总额 (根据类型区分逻辑)
+                let total = monthlyTransactions.reduce(0.0) { sum, t in
+                    let amountToAdd: Double
+                    // 👇 分支逻辑
+                    if type == .expense {
+                        amountToAdd = t.billingAmount // 支出算入账金额
+                    } else {
+                        amountToAdd = CashbackService.calculateCashback(for: t) // 使用实时计算的返现金额
+                    }
+                    
+                    // 汇率换算
+                    // 目标: targetCurrency
+                    // 来源: t.card?.issueRegion.currencyCode
+                    let sourceCurrency = t.card?.issueRegion.currencyCode ?? "CNY"
+                    
+                    if sourceCurrency == targetCurrency {
+                        return sum + amountToAdd
+                    } else {
+                        // 需要换算
+                        // 1. 先换算成 CNY (base)
+                        // rate: 1 Source = x CNY -> amount * rate = CNY
+                        let rateToCNY = exchangeRates[sourceCurrency] ?? 1.0
+                        let amountInCNY = amountToAdd * rateToCNY
+                        
+                        // 2. 再从 CNY 换算成 Target
+                        // rate: 1 Target = y CNY
+                        // Target = CNY / y
+                        let rateTargetToCNY = exchangeRates[targetCurrency] ?? 1.0
+                        let safeRate = rateTargetToCNY > 0 ? rateTargetToCNY : 1.0
+                        
+                        return sum + (amountInCNY / safeRate)
+                    }
+                }
+                
+                data.append(MonthlyData(date: date, amount: total))
+            }
+        }
+        
+        // data 已经是正序了 (Oldest ... Newest)
+        let result = data 
         
         // 更新 UI
         withAnimation(.easeInOut) {
@@ -153,9 +306,11 @@ struct TrendAnalysisView: View {
 // 1. 图表子视图
 private struct ChartView: View {
     let type: TrendType
-    let selectedCard: CreditCard?
+    let selectedFilter: TrendFilter
     let data: [MonthlyData]
+    let currencySymbol: String
     @Binding var rawSelectedDate: Date?
+    var trendDisplayMode: Int = 0 // Default to 0
     
     var totalAmount: Double {
         data.reduce(0) { $0 + $1.amount }
@@ -169,9 +324,20 @@ private struct ChartView: View {
         })
     }
     
+    var headerTitle: String {
+        switch selectedFilter {
+        case .all:
+            return String(format: AppConstants.Trend.totalTrend, type.title)
+        case .rewardCash:
+            return String(format: AppConstants.Trend.cardTrend, "奖赏钱账户", type.title)
+        case .card(let card):
+            return String(format: AppConstants.Trend.cardTrend, card.bankName, type.title)
+        }
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(selectedCard == nil ? String(format: AppConstants.Trend.totalTrend, type.title) : String(format: AppConstants.Trend.cardTrend, selectedCard!.bankName, type.title))
+            Text(headerTitle)
                 .font(.headline)
                 .padding(.horizontal)
                 .padding(.top, 16)
@@ -182,16 +348,16 @@ private struct ChartView: View {
                     Text(selected.date.formatted(.dateTime.year().month()))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(String(format: "%.2f", selected.amount))
+                    Text("\(currencySymbol)\(String(format: "%.2f", selected.amount))")
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundStyle(type.color)
                         .contentTransition(.numericText())
                 } else {
-                    Text(AppConstants.Trend.cumulative12Months)
+                    Text(trendDisplayMode == 0 ? AppConstants.Trend.cumulative12Months : "累计总额")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(String(format: "%.2f", totalAmount))
+                    Text("\(currencySymbol)\(String(format: "%.2f", totalAmount))")
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundStyle(type.color)
@@ -207,22 +373,7 @@ private struct ChartView: View {
                     .frame(height: 260)
             } else {
                 Chart(data) { item in
-                    // 线条
-                    LineMark(
-                        x: .value(AppConstants.Trend.monthLabel, item.date, unit: .month),
-                        y: .value(AppConstants.Trend.amountLabel, item.amount)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(type.color)
-                    .lineStyle(StrokeStyle(lineWidth: 3))
-                    .symbol {
-                        Circle()
-                            .fill(type.color)
-                            .frame(width: 8, height: 8)
-                            .shadow(radius: 2)
-                    }
-                    
-                    // 渐变填充
+                    // 1. 渐变填充 (来自旧版代码)
                     AreaMark(
                         x: .value(AppConstants.Trend.monthLabel, item.date, unit: .month),
                         y: .value(AppConstants.Trend.amountLabel, item.amount)
@@ -234,27 +385,47 @@ private struct ChartView: View {
                             endPoint: .bottom
                         )
                     )
+                    .interpolationMethod(.catmullRom)
+                    
+                    // 2. 线条
+                    LineMark(
+                        x: .value(AppConstants.Trend.monthLabel, item.date, unit: .month),
+                        y: .value(AppConstants.Trend.amountLabel, item.amount)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(type.color)
+                    .lineStyle(StrokeStyle(lineWidth: 3))
+                    
+                    // 3. 数据点 (来自旧版代码，稍作调整)
+                    PointMark(
+                        x: .value(AppConstants.Trend.monthLabel, item.date, unit: .month),
+                        y: .value(AppConstants.Trend.amountLabel, item.amount)
+                    )
+                    .foregroundStyle(.white)
+                    .symbolSize(40) // 稍微调小一点，旧版是60
+                    .symbol {
+                        Circle()
+                            .fill(.white)
+                            .stroke(type.color, lineWidth: 2)
+                            .frame(width: 8, height: 8)
+                    }
                     
                     // ✨ iOS 17+: 选中指示器
                     if let selected = selectedDataPoint, selected.id == item.id {
                         RuleMark(x: .value("Selected", selected.date, unit: .month))
                             .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
                             .foregroundStyle(.gray.opacity(0.5))
-                            .annotation(position: .top) {
-                                Circle()
-                                    .stroke(type.color, lineWidth: 3)
-                                    .fill(.white)
-                                    .frame(width: 12, height: 12)
-                            }
+                            .zIndex(-1) // 放在最底层
                     }
                 }
-                .chartScrollableAxes(.horizontal) // 支持横向滚动（如果数据点很多）
-                .chartXVisibleDomain(length: 12) // 默认显示12个月
+                .chartScrollableAxes(trendDisplayMode == 1 ? .horizontal : [])
+                .chartXVisibleDomain(length: trendDisplayMode == 1 ? 3600 * 24 * 365 : 0) // Show approx 12 months if scrollable
                 // ✨ iOS 17+: 交互选择
                 .chartXSelection(value: $rawSelectedDate)
                 .frame(height: 260)
                 .padding(.horizontal)
                 .padding(.bottom, 16)
+                // .drawingGroup() // ⚠️ 移除：可能导致渲染问题
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .month)) { value in
                         AxisValueLabel(format: .dateTime.month(), centered: true)
@@ -265,7 +436,7 @@ private struct ChartView: View {
                     AxisMarks { value in
                         AxisGridLine()
                         AxisValueLabel()
-                            .font(.system(size: 13))
+                        .font(.system(size: 13))
                     }
                 }
             }
@@ -273,20 +444,20 @@ private struct ChartView: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .cornerRadius(16)
         .padding(.horizontal)
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 }
 
 // 2. 卡片选择列表
 private struct CardSelectionList: View {
     let cards: [CreditCard]
-    @Binding var selectedCard: CreditCard?
+    @Binding var selectedFilter: TrendFilter
+    let type: TrendType
     
     var body: some View {
         List {
             // "全部卡片" 选项
             Button {
-                withAnimation { selectedCard = nil }
+                withAnimation { selectedFilter = .all }
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -297,7 +468,7 @@ private struct CardSelectionList: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    if selectedCard == nil {
+                    if selectedFilter == .all {
                         Image(systemName: "checkmark")
                             .foregroundColor(.blue)
                             .fontWeight(.bold)
@@ -310,9 +481,37 @@ private struct CardSelectionList: View {
             Section(header: Text(AppConstants.Trend.selectCardToViewDetail)) {
                 ForEach(cards) { card in
                     Button {
-                        withAnimation { selectedCard = card }
+                        withAnimation { selectedFilter = .card(card) }
                     } label: {
-                        CardRowView(card: card, isSelected: selectedCard?.id == card.id)
+                        CardRowView(card: card, isSelected: selectedFilter == .card(card))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            
+            // 奖赏钱账户返现 (仅在返现分析时显示，或者用户要求都显示？用户说"返现分析页面里")
+            // 用户说：返现分析页面里在最后加一个"奖赏钱账户返现“
+            if type == .cashback {
+                Section {
+                    Button {
+                        withAnimation { selectedFilter = .rewardCash }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("奖赏钱账户返现")
+                                    .font(.headline)
+                                Text("不属于任何卡片的返现")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if selectedFilter == .rewardCash {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                                    .fontWeight(.bold)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }

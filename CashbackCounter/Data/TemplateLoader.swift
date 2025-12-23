@@ -9,7 +9,7 @@ import Foundation
 import OSLog
 
 struct TemplateLoader {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CashbackCounter", category: "TemplateLoader")
+    private static let logger = Logger(subsystem: "CashbackCounter", category: "TemplateLoader")
     
     /// 从 Bundle 加载模板数据
     static func loadTemplates() -> [CardTemplate] {
@@ -20,6 +20,14 @@ struct TemplateLoader {
                 let templates = try JSONDecoder().decode([CardTemplate].self, from: data)
                 logger.info("成功从 Bundle 加载 \(templates.count) 个模板")
                 return templates
+            } catch let DecodingError.dataCorrupted(context) {
+                logger.error("数据损坏: \(context.debugDescription)")
+            } catch let DecodingError.keyNotFound(key, context) {
+                logger.error("找不到键 '\(key.stringValue)': \(context.debugDescription), path: \(context.codingPath)")
+            } catch let DecodingError.valueNotFound(value, context) {
+                logger.error("找不到值 '\(value)': \(context.debugDescription), path: \(context.codingPath)")
+            } catch let DecodingError.typeMismatch(type, context) {
+                logger.error("类型不匹配 '\(type)': \(context.debugDescription), path: \(context.codingPath)")
             } catch {
                 logger.error("解析 templates.json 失败: \(error.localizedDescription)")
             }

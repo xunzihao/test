@@ -37,6 +37,9 @@ struct SettingsView: View {
                 // 3. 常规设置
                 GeneralSection()
                 
+                // 3.5 趋势分析设置
+                TrendSettingsSection()
+                
                 // 4. 数据管理
                 DataManagementSection()
                 
@@ -153,6 +156,20 @@ private struct GeneralSection: View {
             
             NavigationLink(destination: NotificationSettingsView()) {
                 Label(AppConstants.Settings.notifications, systemImage: "bell")
+            }
+        }
+    }
+}
+
+// 3.5 趋势分析设置
+private struct TrendSettingsSection: View {
+    @AppStorage(AppConstants.Keys.trendDisplayMode) private var trendDisplayMode: Int = 0
+    
+    var body: some View {
+        Section(header: Text(AppConstants.Settings.trendAnalysisSettings)) {
+            Picker(AppConstants.Settings.trendDisplayMode, selection: $trendDisplayMode) {
+                Text(AppConstants.Settings.last12Months).tag(0)
+                Text(AppConstants.Settings.allTime).tag(1)
             }
         }
     }

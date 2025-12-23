@@ -121,11 +121,12 @@ private extension TransactionRow {
     
     var cardDisplayName: String? {
         guard let card = transaction.card else { return nil }
-        return "\(card.bankName) \(card.type)"
+        // 简化卡片显示：只显示银行名称，不显示类型 (例如: "汇丰香港" 而不是 "汇丰香港 Premier Mastercard World")
+        return card.bankName
     }
     
     var amountString: String {
-        "\(transaction.location.currencySymbol)\(Formatters.currency(transaction.amount))"
+        "\(transaction.location.currencySymbol)\(Formatters.currency(transaction.spendingAmount))"
     }
     
     var shouldShowCashback: Bool {

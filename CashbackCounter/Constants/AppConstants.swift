@@ -94,6 +94,11 @@ struct AppConstants {
         
         static let resetAllData = "重置所有数据 (慎用)"
         static let repaymentSwitchLabel = "开启提醒"
+        
+        static let trendAnalysisSettings = "趋势分析设置"
+        static let trendDisplayMode = "图表显示范围"
+        static let last12Months = "近12个月"
+        static let allTime = "全部记录 (可拖动)"
     }
     
     struct Card {
@@ -159,7 +164,7 @@ struct AppConstants {
     struct Transaction {
         static let creditTransactionLabel = "CR"
         static let cashbackPrefix = "返现"
-        static let unfillPaymentMethod = "未填写"
+        static let otherPaymentMethod = "其他方式"
         static let deletedCard = "已删除卡片"
         static let noCard = "无卡"
         static let onlineShopping = "网购"
@@ -211,8 +216,8 @@ struct AppConstants {
         static let aiAnalyzingReceipt = "🔍 开始 AI 分析收据..."
         static let consumptionDetails = "消费详情"
         static let merchantNamePlaceholder = "商户名称"
-        static let consumptionCurrency = "消费币种"
-        static let consumptionAmount = "消费金额"
+        static let spendingCurrency = "消费币种"
+        static let spendingAmount = "消费金额"
         static let consumptionCategory = "消费类别"
         static let consumptionRegion = "消费地区"
         static let currencyMismatch = "消费币种(%@)与地区(%@)不一致"
@@ -464,6 +469,7 @@ struct AppConstants {
          """
     }
     
+    
     struct Notification {
         static let repaymentTitlePrefix = "还款提醒: "
         static let repaymentBody = "今天是您的信用卡还款日，请及时还款以免逾期。"
@@ -482,6 +488,7 @@ struct AppConstants {
     struct Keys {
         static let userTheme = "userTheme"
         static let userLanguage = "userLanguage"
+        static let trendDisplayMode = "trendDisplayMode" // 0: 12 months, 1: all time
         static let cachedExchangeRates = "cached_exchange_rates"
     }
     
@@ -509,12 +516,13 @@ struct AppConstants {
         static let originalAmount = "原币金额: %@"
         static let exchangeRateConversion = "汇率转换: %@ × %@ = %@"
         static let ftfFee = "FTF费用: %@ × %@%% = %@"
-        static let billingAmount = "入账金额: %@ × (1 + %@%%) = %@"
+        static let billingAmount = "入账金额: %@"
+//        static let billingAmount = "入账金额: %@ × (1 + %@%%) = %@"
         static let exchangeRateConversionNoFTF = "汇率转换: %@ × %@ = %@（免FTF）"
         static let billingAmountNoConversion = "入账金额: %@（无需转换）"
         static let usingRuleManual = "使用规则: 规则%d（手动选择）"
         static let baseCashbackRate = "基础返现率: %@%%"
-        static let usingRuleAuto = "使用规则: 规则%d（自动匹配，基于币种: %@）"
+        static let usingRuleAuto = "使用规则: 规则%d（自动匹配）"
         static let noRuleMatched = "⚠️ 未匹配到任何返现规则"
         static let cashbackAmountZero = "返现金额: 0.00 %@"
         static let categoryBonus = "类别加成: %@%%"
@@ -611,9 +619,9 @@ struct AppConstants {
                 "还款",
                 "分期",
                 "SALE",
-                "CBF",
+//                "CBF",
                 "自动还款",
-                "未填写"
+                "其他方式"
             ]
 
         }

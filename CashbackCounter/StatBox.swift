@@ -32,7 +32,8 @@ struct StatBox: View {
                 .fontWeight(.bold)
                 .monospacedDigit() // 数字等宽，防止宽度跳动
                 .minimumScaleFactor(0.8) // 防止数字过长截断，允许缩小
-                .lineLimit(1)
+                .lineLimit(nil) // 允许换行
+                .fixedSize(horizontal: false, vertical: true) // 垂直方向自适应高度
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()

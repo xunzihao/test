@@ -291,6 +291,9 @@
         }
       }
     },
+    "0.00" : {
+
+    },
     "1.0" : {
       "localizations" : {
         "en" : {
@@ -624,6 +627,9 @@
         }
       }
     },
+    "不属于任何卡片的返现" : {
+
+    },
     "主题模式" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -704,7 +710,6 @@
       }
     },
     "保存" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -738,7 +743,6 @@
       }
     },
     "入账金额" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1078,7 +1082,6 @@
       }
     },
     "取消" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1110,6 +1113,9 @@
           }
         }
       }
+    },
+    "可选 (例如: 活动奖励)" : {
+
     },
     "后四位" : {
       "extractionState" : "stale",
@@ -1201,6 +1207,9 @@
         }
       }
     },
+    "备注" : {
+
+    },
     "外观与语言" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1246,6 +1255,9 @@
           }
         }
       }
+    },
+    "奖赏钱账户返现" : {
+
     },
     "好的" : {
       "extractionState" : "stale",
@@ -1419,6 +1431,9 @@
         }
       }
     },
+    "属于奖赏钱账户 (不关联特定卡片)" : {
+
+    },
     "常规" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1509,6 +1524,9 @@
           }
         }
       }
+    },
+    "归属账户" : {
+
     },
     "总%@趋势" : {
       "extractionState" : "stale",
@@ -1732,6 +1750,12 @@
         }
       }
     },
+    "日期" : {
+
+    },
+    "暂无信用卡，请先添加" : {
+
+    },
     "暂无卡片，请先添加信用卡" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1925,6 +1949,9 @@
           }
         }
       }
+    },
+    "此金额由 AI 从小票识别" : {
+
     },
     "每月 %lld 日还款" : {
       "extractionState" : "stale",
@@ -2130,6 +2157,9 @@
           }
         }
       }
+    },
+    "添加返现" : {
+
     },
     "版本" : {
       "extractionState" : "stale",
@@ -2430,6 +2460,9 @@
         }
       }
     },
+    "请选择" : {
+
+    },
     "账单" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2516,6 +2549,9 @@
         }
       }
     },
+    "返现详情" : {
+
+    },
     "还款提醒" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2560,6 +2596,9 @@
           }
         }
       }
+    },
+    "选择卡片" : {
+
     },
     "选择卡片查看详情" : {
       "extractionState" : "stale",
@@ -2653,6 +2692,9 @@
         }
       }
     },
+    "重新分析" : {
+
+    },
     "重置所有数据 (慎用)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2677,7 +2719,6 @@
       }
     },
     "金额" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

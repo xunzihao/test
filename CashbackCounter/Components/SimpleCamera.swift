@@ -256,6 +256,7 @@ extension CameraService: AVCapturePhotoCaptureDelegate {
 
 struct CameraPreview: UIViewRepresentable {
     @ObservedObject var cameraService: CameraService
+    var onTap: ((CGPoint) -> Void)?
     
     func makeUIView(context: Context) -> CameraPreviewView {
         let view = CameraPreviewView()
@@ -268,7 +269,9 @@ struct CameraPreview: UIViewRepresentable {
         return view
     }
     
-    func updateUIView(_ uiView: CameraPreviewView, context: Context) {}
+    func updateUIView(_ uiView: CameraPreviewView, context: Context) {
+        context.coordinator.onTap = onTap
+    }
     
     func makeCoordinator() -> Coordinator {
         Coordinator(service: cameraService)
@@ -276,6 +279,7 @@ struct CameraPreview: UIViewRepresentable {
     
     class Coordinator: NSObject {
         let service: CameraService
+        var onTap: ((CGPoint) -> Void)?
         
         init(service: CameraService) {
             self.service = service
@@ -286,6 +290,7 @@ struct CameraPreview: UIViewRepresentable {
             let point = gesture.location(in: view)
             let convertedPoint = CGPoint(x: point.y / view.bounds.height, y: 1.0 - point.x / view.bounds.width)
             service.focus(at: convertedPoint)
+            onTap?(point)
         }
     }
 }

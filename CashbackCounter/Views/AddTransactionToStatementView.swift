@@ -82,12 +82,12 @@ struct AddTransactionToStatementView: View {
             postDate: postDate,
             transDate: transDate,
             description: merchantName,
-            amount: amount,
-            currency: AppConstants.Currency.hkd,
+            billingAmount: amount,
+            billingCurrency: AppConstants.Currency.hkd,
             paymentMethod: paymentMethod,
             isForeignCurrency: false,
-            foreignCurrency: nil,
-            foreignAmount: nil,
+            spendingCurrency: nil,
+            spendingAmount: nil,
             isRefundOrPayment: isNonCashback,
             cbfFee: cbfFee
         )

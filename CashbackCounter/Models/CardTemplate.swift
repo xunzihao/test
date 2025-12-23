@@ -36,7 +36,7 @@ struct CardTemplate: Identifiable, Codable {
     var type: String {
         return "\(cardOrganization.displayName) \(cardLevel.displayName)"
     }
-    
+
     // MARK: - Init
     // 提供默认初始化器，方便代码创建（保留原有用法）
     init(

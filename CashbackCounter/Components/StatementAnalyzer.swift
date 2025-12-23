@@ -23,14 +23,14 @@ struct StatementAnalysisResult {
         var postDate: Date?      // 记账日
         var transDate: Date?     // 交易日
         var description: String  // 交易描述
-        var amount: Double       // 金额（入账金额，本币 HKD）
-        var currency: String = AppConstants.Currency.hkd // 入账币种
+        var billingAmount: Double       // 金额（入账金额，本币 HKD）
+        var billingCurrency: String = AppConstants.Currency.hkd // 入账币种
         var paymentMethod: String? = nil // 支付方式（自动检测）
         
         // 🆕 外币交易信息（用于判断返现规则）
         var isForeignCurrency: Bool = false  // 是否为外币交易（决定使用哪套返现规则）
-        var foreignCurrency: String?         // 外币币种（如 USD, JPY）
-        var foreignAmount: Double?           // 外币消费金额
+        var spendingCurrency: String?         // 外币币种（如 USD, JPY）
+        var spendingAmount: Double?           // 外币消费金额
         
         // 🆕 返现计算标记
         var isRefundOrPayment: Bool = false  // 是否为退款/还款（不计算返现，但显示在列表中）
@@ -39,7 +39,7 @@ struct StatementAnalysisResult {
         
         /// 🔑 用于返现计算的币种（如果是外币交易，使用外币币种；否则使用入账币种）
         var cashbackCurrency: String {
-            return isForeignCurrency ? (foreignCurrency ?? currency) : currency
+            return isForeignCurrency ? (spendingCurrency ?? billingCurrency) : billingCurrency
         }
     }
 }
@@ -144,7 +144,7 @@ final class StatementAnalyzer {
         extractStatementDate(from: rows, into: &result)
         
         // 3. 提取交易记录
-        extractTransactionsFromTable(rows: rows, into: &result)
+        extractTransactionsFromTable(rows: rows, into: &result, statementDate: result.statementDate)
         
         return result
     }
@@ -191,21 +191,36 @@ final class StatementAnalyzer {
     }
     
     private func extractStatementDate(from rows: [RecognizedRow], into result: inout StatementAnalysisResult) {
-        for row in rows {
+        for (index, row) in rows.enumerated() {
             let text = row.text
             let uppercasedText = text.uppercased()
             
             // 查找 "Statement Date" 或 "结单日"
-            if uppercasedText.contains(AppConstants.OCR.statementDate) || text.contains(AppConstants.OCR.statementDateCN) {
+            if uppercasedText.contains(AppConstants.OCR.statementDate) || 
+               text.contains(AppConstants.OCR.statementDateCN) ||
+               text.contains("結單日") {
+                // 1. 尝试在当前行找
                 if let date = extractDate(from: text, formats: ["dd MMM yyyy", "yyyy-MM-dd", "dd/MM/yyyy"]) {
                     result.statementDate = date
+                    logger.info("Found statement date in header row: \(date)")
                     break
+                }
+                
+                // 2. 尝试在下一行找
+                if index + 1 < rows.count {
+                    let nextRow = rows[index + 1]
+                    // 检查下一行是否只是一个日期，或者包含日期
+                    if let date = extractDate(from: nextRow.text, formats: ["dd MMM yyyy", "yyyy-MM-dd", "dd/MM/yyyy"]) {
+                        result.statementDate = date
+                        logger.info("Found statement date in next row: \(date)")
+                        break
+                    }
                 }
             }
         }
     }
     
-    private func extractTransactionsFromTable(rows: [RecognizedRow], into result: inout StatementAnalysisResult) {
+    private func extractTransactionsFromTable(rows: [RecognizedRow], into result: inout StatementAnalysisResult, statementDate: Date?) {
         // 1. 找到表头
         guard let headerIndex = rows.firstIndex(where: { row in
             let text = row.text.uppercased()
@@ -237,7 +252,7 @@ final class StatementAnalyzer {
             let currentRow = transactionRows[i]
             let nextRow = (i + 1 < transactionRows.count) ? transactionRows[i + 1] : nil
             
-            if var transaction = parseTableRow(currentRow, nextRow: nextRow) {
+            if var transaction = parseTableRow(currentRow, nextRow: nextRow, statementDate: statementDate) {
                 // 检查后续行是否为 CBF 费用
                 var cbfRowOffset = 0
                 if let next = nextRow, isPaymentMethodRow(next) {
@@ -249,10 +264,10 @@ final class StatementAnalyzer {
                 let potentialCBFRow = (i + cbfRowOffset < transactionRows.count) ? transactionRows[i + cbfRowOffset] : nil
                 
                 if let cbfRow = potentialCBFRow,
-                   let cbfTransaction = parseTableRow(cbfRow, nextRow: nil),
+                   let cbfTransaction = parseTableRow(cbfRow, nextRow: nil, statementDate: statementDate),
                    cbfTransaction.paymentMethod == AppConstants.Transaction.cbf {
                     
-                    transaction.cbfFee = abs(cbfTransaction.amount)
+                    transaction.cbfFee = abs(cbfTransaction.billingAmount)
                     logger.debug("💰 检测到 CBF: \(transaction.cbfFee!) 合并至 \(transaction.description)")
                     i += cbfRowOffset
                 }
@@ -286,14 +301,14 @@ final class StatementAnalyzer {
     
     // MARK: - 单行解析核心逻辑
     
-    private func parseTableRow(_ row: RecognizedRow, nextRow: RecognizedRow? = nil) -> StatementAnalysisResult.ParsedTransaction? {
+    private func parseTableRow(_ row: RecognizedRow, nextRow: RecognizedRow? = nil, statementDate: Date? = nil) -> StatementAnalysisResult.ParsedTransaction? {
         let elements = row.elements
         guard elements.count >= 2 else { return nil }
         
-        var transaction = StatementAnalysisResult.ParsedTransaction(description: "", amount: 0)
+        var transaction = StatementAnalysisResult.ParsedTransaction(description: "", billingAmount: 0)
         
         // 1. 提取日期
-        let dates = extractAllDates(from: row.text)
+        let dates = extractAllDates(from: row.text, referenceDate: statementDate)
         if dates.count >= 2 {
             transaction.postDate = dates[0]
             transaction.transDate = dates[1]
@@ -309,15 +324,15 @@ final class StatementAnalyzer {
         let foreignCurrencyInfo = extractForeignCurrencyInfo(from: elements)
         if let fcInfo = foreignCurrencyInfo {
             transaction.isForeignCurrency = true
-            transaction.foreignCurrency = fcInfo.currency
-            transaction.foreignAmount = fcInfo.amount
+            transaction.spendingCurrency = fcInfo.currency
+            transaction.spendingAmount = fcInfo.amount
         }
         
         // 3. 提取金额（从后往前找）
         var amountIndex = -1
         for i in stride(from: elements.count - 1, through: 0, by: -1) {
             if let amount = extractAmountFromText(elements[i].text) {
-                transaction.amount = amount
+                transaction.billingAmount = amount
                 amountIndex = i
                 break
             }
@@ -338,7 +353,7 @@ final class StatementAnalyzer {
         
         // 5. 后处理：修正 OCR 错误、检测支付方式
         transaction.description = TextCorrector.correctMerchantName(transaction.description)
-        transaction.paymentMethod = detectPaymentMethod(from: transaction.description, amount: transaction.amount)
+        transaction.paymentMethod = detectPaymentMethod(from: transaction.description, amount: transaction.billingAmount)
         
         // 6. 标记特殊类型
         if isRefundOrRepayment(method: transaction.paymentMethod) {
@@ -349,7 +364,7 @@ final class StatementAnalyzer {
         if transaction.paymentMethod == AppConstants.OCR.sale,
            let nextRow = nextRow,
            isPaymentMethodRow(nextRow),
-           let nextMethod = detectPaymentMethod(from: nextRow.text, amount: abs(transaction.amount)),
+           let nextMethod = detectPaymentMethod(from: nextRow.text, amount: abs(transaction.billingAmount)),
            !isRefundOrRepayment(method: nextMethod) && nextMethod != AppConstants.OCR.sale {
             
             transaction.paymentMethod = nextMethod
@@ -407,7 +422,7 @@ final class StatementAnalyzer {
         return AppConstants.OCR.sale
     }
     
-    private func extractAllDates(from text: String) -> [Date] {
+    private func extractAllDates(from text: String, referenceDate: Date? = nil) -> [Date] {
         let correctedText = TextCorrector.correctDateText(text.uppercased())
         let matches = text.ranges(of: shortDateRegex)
         
@@ -416,7 +431,7 @@ final class StatementAnalyzer {
             // 这里我们需要提取捕获组的内容，但 ranges(of:) 返回的是整体范围
             // 对于 RegexBuilder，我们可以直接匹配并获取 Output
             // 简单起见，我们对匹配到的子串再做一次解析
-            return parseShortDate(dateStr)
+            return parseShortDate(dateStr, referenceDate: referenceDate)
         }
     }
     
@@ -439,7 +454,7 @@ final class StatementAnalyzer {
         return isCR ? -amount : amount
     }
     
-    private func parseShortDate(_ dateStr: String) -> Date? {
+    private func parseShortDate(_ dateStr: String, referenceDate: Date? = nil) -> Date? {
         let formatter = DateFormatter()
         formatter.dateFormat = "ddMMM"
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -451,16 +466,34 @@ final class StatementAnalyzer {
         
         // 智能年份推断
         var components = Calendar.current.dateComponents([.day, .month], from: date)
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let currentMonth = Calendar.current.component(.month, from: Date())
         
-        components.year = currentYear
-        
-        if let month = components.month {
-            if month >= 11 && currentMonth <= 2 {
-                components.year = currentYear - 1
-            } else if month <= 2 && currentMonth >= 11 {
-                components.year = currentYear + 1
+        if let refDate = referenceDate {
+            // 如果有参考日期（结单日），以结单日为基准
+            let refYear = Calendar.current.component(.year, from: refDate)
+            let refMonth = Calendar.current.component(.month, from: refDate)
+            
+            components.year = refYear
+            
+            if let month = components.month {
+                // 如果交易月份大于结单月份，说明是上一年的交易
+                // 例如：结单日 2025年1月，交易日 12月 -> 2024年
+                if month > refMonth {
+                    components.year = refYear - 1
+                }
+            }
+        } else {
+            // 原有的基于当前日期的推断逻辑
+            let currentYear = Calendar.current.component(.year, from: Date())
+            let currentMonth = Calendar.current.component(.month, from: Date())
+            
+            components.year = currentYear
+            
+            if let month = components.month {
+                if month >= 11 && currentMonth <= 2 {
+                    components.year = currentYear - 1
+                } else if month <= 2 && currentMonth >= 11 {
+                    components.year = currentYear + 1
+                }
             }
         }
         

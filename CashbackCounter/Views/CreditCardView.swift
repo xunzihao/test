@@ -69,16 +69,16 @@ struct CreditCardView: View {
     
     private var gradientColors: [Color] {
         guard let org = cardOrganization else {
-            return [.blue, .purple]
+            return [.blue]
         }
         
         switch org {
-        case .unionPay:  return [.red, Color(red: 0.8, green: 0, blue: 0)]
-        case .visa:      return [.blue, Color(red: 0, green: 0.3, blue: 0.8)]
+        case .unionPay:  return [.red]
+        case .visa:      return [.blue]
         case .mastercard:return [.orange, .red]
-        case .amex:      return [.blue, .cyan]
+        case .amex:      return [.blue]
         case .jcb:       return [.green, .blue]
-        case .discover:  return [.orange, Color(red: 0.9, green: 0.5, blue: 0)]
+        case .discover:  return [.orange]
         }
     }
 }
@@ -96,30 +96,12 @@ private struct CardBackground: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // ✨ iOS 18+: 使用 MeshGradient 作为默认背景
-            if #available(iOS 18.0, *) {
-                MeshGradient(
-                    width: 3,
-                    height: 3,
-                    points: [
-                        .init(0, 0), .init(0.5, 0), .init(1, 0),
-                        .init(0, 0.5), .init(0.5, 0.5), .init(1, 0.5),
-                        .init(0, 1), .init(0.5, 1), .init(1, 1)
-                    ],
-                    colors: [
-                        gradientColors.first ?? .blue, .white.opacity(0.2), gradientColors.last ?? .purple,
-                        gradientColors.last?.opacity(0.5) ?? .purple.opacity(0.5), .clear, gradientColors.first?.opacity(0.5) ?? .blue.opacity(0.5),
-                        gradientColors.last ?? .purple, .white.opacity(0.2), gradientColors.first ?? .blue
-                    ]
-                )
-                .opacity(0.8) // 稍微柔和一点
-            } else {
                 LinearGradient(
                     colors: gradientColors,
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-            }
+            
         }
     }
 }

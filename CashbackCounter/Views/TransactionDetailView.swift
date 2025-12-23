@@ -104,7 +104,7 @@ private struct AmountDisplayView: View {
     var body: some View {
         // 建议：直接从 Transaction 获取货币符号，或统一使用 Region 的符号
         let currency = transaction.location.currencySymbol
-        let amountStr = String(format: "%.2f", transaction.amount)
+        let amountStr = String(format: "%.2f", transaction.spendingAmount)
         
         Text("- \(currency)\(amountStr)")
             .font(.system(size: 40, weight: .bold, design: .rounded))

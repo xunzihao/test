@@ -21,10 +21,33 @@ class ImageDownloadManager: NSObject, ObservableObject {
     private var downloadTask: URLSessionDownloadTask?
     private lazy var urlSession: URLSession = {
         let configuration = URLSessionConfiguration.default
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
+        let delegate = SessionDelegate(parent: self)
+        return URLSession(configuration: configuration, delegate: delegate, delegateQueue: .main)
     }()
     
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CashbackCounter", category: "ImageDownloadManager")
+    
+    // MARK: - Session Delegate Wrapper
+    
+    private class SessionDelegate: NSObject, URLSessionDownloadDelegate {
+        weak var parent: ImageDownloadManager?
+        
+        init(parent: ImageDownloadManager) {
+            self.parent = parent
+        }
+        
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+            parent?.handleProgress(totalBytesWritten: totalBytesWritten, totalBytesExpectedToWrite: totalBytesExpectedToWrite)
+        }
+        
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+            parent?.handleFinishDownloading(task: downloadTask, location: location)
+        }
+        
+        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            parent?.handleCompletion(task: task, error: error)
+        }
+    }
     
     // MARK: - Public Methods
     
@@ -93,12 +116,9 @@ class ImageDownloadManager: NSObject, ObservableObject {
         self.isDownloading = false
         self.errorMessage = message
     }
-}
-
-// MARK: - URLSessionDownloadDelegate
-extension ImageDownloadManager: URLSessionDownloadDelegate {
+    // MARK: - Delegate Handlers
     
-    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+    nonisolated fileprivate func handleProgress(totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         guard totalBytesExpectedToWrite > 0 else { return }
         let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         
@@ -107,8 +127,8 @@ extension ImageDownloadManager: URLSessionDownloadDelegate {
         }
     }
     
-    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let originalURL = downloadTask.originalRequest?.url?.absoluteString else { return }
+    nonisolated fileprivate func handleFinishDownloading(task: URLSessionDownloadTask, location: URL) {
+        guard let originalURL = task.originalRequest?.url?.absoluteString else { return }
         
         // Move file to a safe place or read data immediately
         do {
@@ -133,7 +153,7 @@ extension ImageDownloadManager: URLSessionDownloadDelegate {
         }
     }
     
-    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    nonisolated fileprivate func handleCompletion(task: URLSessionTask, error: Error?) {
         if let error = error {
             // Ignore cancellation error
             if (error as NSError).code == NSURLErrorCancelled {
@@ -146,7 +166,6 @@ extension ImageDownloadManager: URLSessionDownloadDelegate {
         } else {
              // Success is handled in didFinishDownloadingTo
              // But we need to check HTTP status codes if needed.
-             // downloadTask doesn't expose response in didFinishDownloadingTo as easily for status codes unless we check task.response
              if let httpResponse = task.response as? HTTPURLResponse,
                 !(200...299).contains(httpResponse.statusCode) {
                  Task { @MainActor in
@@ -156,5 +175,6 @@ extension ImageDownloadManager: URLSessionDownloadDelegate {
         }
     }
 }
+
 
 

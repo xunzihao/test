@@ -21,12 +21,41 @@ struct CameraRecordView: View {
     // Zoom State
     @State private var baseZoomFactor: CGFloat = 1.0
     
+    // Focus State
+    @State private var focusPoint: CGPoint = .zero
+    @State private var showFocusBox = false
+    @State private var focusTask: Task<Void, Never>?
+    @State private var focusId = UUID() // 用于强制重启动画
+    
     var body: some View {
         ZStack {
             // 1. 相机预览层
-            CameraPreview(cameraService: cameraService)
-                .ignoresSafeArea()
-                .gesture(zoomGesture)
+            CameraPreview(cameraService: cameraService) { point in
+                // 触发对焦动画
+                focusTask?.cancel()
+                focusPoint = point
+                showFocusBox = true
+                focusId = UUID() // 强制刷新视图以重播动画
+                
+                focusTask = Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1秒后消失
+                    if !Task.isCancelled {
+                        withAnimation {
+                            showFocusBox = false
+                        }
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            .gesture(zoomGesture)
+            
+            // 对焦框
+            if showFocusBox {
+                FocusView()
+                    .position(focusPoint)
+                    .ignoresSafeArea() // 关键：必须忽略安全区域，否则坐标系会偏移
+                    .id(focusId)       // 关键：强制重建视图以触发 onAppear 动画
+            }
             
             // 2. 拖拽提示层 (当有文件拖入时显示)
             if isTargeted {
@@ -79,6 +108,9 @@ struct CameraRecordView: View {
         // Sheet 弹窗管理
         .sheet(isPresented: $showPhotoLibrary) {
             ImagePicker(selectedImage: $selectedImage, sourceType: .photoLibrary)
+                .onAppear {
+                    cameraService.stop()
+                }
                 .onDisappear {
                     // 关闭相册后恢复相机
                     if !showAddSheet {
@@ -87,20 +119,18 @@ struct CameraRecordView: View {
                 }
         }
         .sheet(isPresented: $showAddSheet) {
-            AddTransactionView(image: selectedImage, onSaved: {})
+            AddTransactionView(image: selectedImage, onSaved: {
+                showAddSheet = false
+            })
+                .onAppear {
+                    cameraService.stop()
+                }
                 .onDisappear {
                     selectedImage = nil
                     cameraService.recentImage = nil
                     // 关闭记账页后恢复相机
                     cameraService.start()
                 }
-        }
-        // 自动暂停/恢复相机以节省电量
-        .onChange(of: showPhotoLibrary) { _, isShowing in
-            if isShowing { cameraService.stop() }
-        }
-        .onChange(of: showAddSheet) { _, isShowing in
-            if isShowing { cameraService.stop() }
         }
     }
     
@@ -323,5 +353,29 @@ private struct CameraBottomBar: View {
             .padding(.horizontal, 30)
             .padding(.bottom, 50)
         }
+    }
+}
+
+private struct FocusView: View {
+    @State private var scale: CGFloat = 1.5
+    @State private var opacity: Double = 1.0
+    
+    var body: some View {
+        Rectangle()
+            .stroke(Color.yellow, lineWidth: 1.5)
+            .frame(width: 70, height: 70) // 稍微调小一点，更精致
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .onAppear {
+                // 1. 缩放动画：快速从 1.5 倍缩小到 1.0
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) {
+                    scale = 1.0
+                }
+                
+                // 2. 闪烁动画：模拟相机对焦确认
+                withAnimation(.easeInOut(duration: 0.15).repeatCount(2, autoreverses: true).delay(0.1)) {
+                    opacity = 0.5
+                }
+            }
     }
 }

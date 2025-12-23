@@ -18,22 +18,55 @@ final class AppleIntelligenceAvailability: ObservableObject {
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? AppConstants.General.bundleName, category: "AppleIntelligenceAvailability")
 
     func refreshSupportStatus() {
-        let supported: Bool
-        if #available(iOS 18.0, *) {
-            // 这里还可以添加更多检查，比如设备型号是否支持 NPU
-            // 目前仅检查系统版本
-            supported = true
-        } else {
-            supported = false
+        // Apple Intelligence 最低系统要求是 iOS 18.1 / macOS 15.1
+        guard #available(iOS 18.0, *) else {
+            updateStatus(supported: false)
+            return
         }
-
+        
+        // 检查硬件支持 (A17 Pro 或 M1 及以上)
+        let hardwareSupported = checkHardwareSupport()
+        updateStatus(supported: hardwareSupported)
+    }
+    
+    private func updateStatus(supported: Bool) {
         if isSupported != supported {
             isSupported = supported
             logger.info("Apple Intelligence 支持状态更新: \(supported)")
         }
-        
-        // 如果状态从未支持变为支持，或者反之，可以在这里处理
-        // 目前 showCompatibilityAlert 的逻辑是：如果不支持，则显示 Alert (通常由 UI 触发调用)
         showCompatibilityAlert = !supported
+    }
+
+    private func checkHardwareSupport() -> Bool {
+        // 1. 获取设备标识符
+        var size: size_t = 0
+        sysctlbyname("hw.machine", nil, &size, nil, 0)
+        var machine = [CChar](repeating: 0, count: Int(size))
+        sysctlbyname("hw.machine", &machine, &size, nil, 0)
+        let identifier = String(cString: machine)
+        
+        logger.debug("当前设备标识符: \(identifier)")
+        
+        return isDeviceSupported(identifier: identifier)
+    }
+
+    private func isDeviceSupported(identifier: String) -> Bool {
+        // iPhone
+        if identifier.hasPrefix("iPhone") {  
+            let versionString = identifier.dropFirst("iPhone".count)
+            guard let commaIndex = versionString.firstIndex(of: ",") else { return false }
+            
+            let majorString = versionString[..<commaIndex]
+            let minorString = versionString[versionString.index(after: commaIndex)...]
+            
+            guard let major = Int(majorString), let minor = Int(minorString) else { return false }
+            
+            if major >= 17 { return true } // iPhone 16 及以后
+            if major == 16 {
+                return minor == 1 || minor == 2
+            }
+            return false
+        }
+        return false
     }
 }

@@ -48,14 +48,14 @@ struct CSVService {
                 let dateStr = columns[0]
                 let merchant = CSVParser.cleanField(columns[1])
                 let categoryName = columns[2]
-                let amount = Double(columns[3]) ?? 0.0
-                let billing = Double(columns[4]) ?? 0.0
+                let spendingAmount = Double(columns[3]) ?? 0.0
+                let billingAmount = Double(columns[4]) ?? 0.0
                 let cashback = Double(columns[5]) ?? 0.0
                 // let ratePercent = Double(columns[6]) ?? 0.0 // 不需要
                 let cardNameRaw = CSVParser.cleanField(columns[7])
                 let cardEndNum = columns[8]
                 let regionName = columns[9].trimmingCharacters(in: .whitespacesAndNewlines)
-                let paymentMethod = columns[10] == AppConstants.Transaction.unfillPaymentMethod ? "" : columns[10]
+                let paymentMethod = columns[10] == AppConstants.Transaction.otherPaymentMethod ? "" : columns[10]
                 let isOnline = columns[11].trimmingCharacters(in: .whitespaces) == AppConstants.CSV.yes
                 let hasCBF = columns[12].trimmingCharacters(in: .whitespaces) == AppConstants.CSV.yes
                 let cbfAmount = Double(columns[13]) ?? 0.0
@@ -89,14 +89,14 @@ struct CSVService {
                     merchant: merchant,
                     category: category,
                     location: region,
-                    amount: amount,
+                    spendingAmount: spendingAmount,
                     date: date,
                     card: matchedCard,
                     paymentMethod: paymentMethod,
                     isOnlineShopping: isOnline,
                     isCBFApplied: hasCBF,
                     isCreditTransaction: isCreditTransaction,
-                    billingAmount: billing,
+                    billingAmount: billingAmount,
                     cashbackAmount: cashback,
                     cbfAmount: cbfAmount
                 )
@@ -115,23 +115,23 @@ struct CSVService {
                 let date = t.dateString
                 let safeMerchant = CSVParser.escapeField(t.merchant)
                 let category = t.category.displayName
-                let amount = String(format: "%.2f", t.amount)
-                let billing = String(format: "%.2f", t.billingAmount)
+                let spendingAmount = String(format: "%.2f", t.spendingAmount)
+                let billingAmount = String(format: "%.2f", t.billingAmount)
                 let cashback = String(format: "%.2f", t.cashbackamount)
                 let ratePercent = String(format: "%.2f", t.rate * 100)
                 
                 let cardNumber = t.card?.endNum ?? AppConstants.Transaction.noCard
-                let cardName: String = t.card.map { CSVParser.escapeField($0.bankName) } ?? AppConstants.Transaction.deletedCard
+                let cardName: String = t.card.map { CSVParser.escapeField($0.bankName) } ?? (t.paymentMethod == "手动返现" ? "奖赏钱账户" : AppConstants.Transaction.deletedCard)
                 
                 let region = t.location.rawValue
-                let payment = t.paymentMethod.isEmpty ? AppConstants.Transaction.unfillPaymentMethod : t.paymentMethod
+                let payment = t.paymentMethod.isEmpty ? AppConstants.Transaction.otherPaymentMethod : t.paymentMethod
                 
                 let isOnline = t.isOnlineShopping ? AppConstants.CSV.yes : AppConstants.CSV.no
                 let hasCBF = t.isCBFApplied ? AppConstants.CSV.yes : AppConstants.CSV.no
                 let cbfAmount = String(format: "%.2f", t.cbfAmount)
                 let isCredit = t.isCreditTransaction ? AppConstants.CSV.yes : AppConstants.CSV.no
                 
-                let row = "\(date),\(safeMerchant),\(category),\(amount),\(billing),\(cashback),\(ratePercent),\(cardName),\(cardNumber),\(region),\(payment),\(isOnline),\(hasCBF),\(cbfAmount),\(isCredit)\n"
+                let row = "\(date),\(safeMerchant),\(category),\(spendingAmount),\(billingAmount),\(cashback),\(ratePercent),\(cardName),\(cardNumber),\(region),\(payment),\(isOnline),\(hasCBF),\(cbfAmount),\(isCredit)\n"
                 csvString.append(row)
             }
             return csvString
