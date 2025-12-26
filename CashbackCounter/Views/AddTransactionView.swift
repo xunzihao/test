@@ -74,8 +74,21 @@ struct AddTransactionView: View {
             _selectedCategory = State(initialValue: t.category)
             _date = State(initialValue: t.date)
             _location = State(initialValue: t.location)
-            _spendingCurrency = State(initialValue: t.location)
-            _billingCurrency = State(initialValue: nil) //
+            
+            // 尝试根据 currency 匹配 Region，如果匹配不到则回退到 location
+            if let matchedRegion = Region.allCases.first(where: { $0.currencyCode == t.spendingCurrency }) {
+                _spendingCurrency = State(initialValue: matchedRegion)
+            } else {
+                _spendingCurrency = State(initialValue: t.location)
+            }
+            
+            // 🆕 加载入账币种
+            if let matchedBilling = Region.allCases.first(where: { $0.currencyCode == t.billingCurrency }) {
+                _billingCurrency = State(initialValue: matchedBilling)
+            } else {
+                _billingCurrency = State(initialValue: nil)
+            }
+            
             _selectedCardIndex = State(initialValue: 0)
             
             _paymentMethod = State(initialValue: t.paymentMethod)
@@ -456,6 +469,8 @@ struct AddTransactionView: View {
                 t.paymentMethod = paymentMethod
                 t.isOnlineShopping = isOnlineShopping
                 t.isCBFApplied = isCBFApplied
+                t.spendingCurrency = spendingCurrency.currencyCode // 🆕 更新消费币种
+                t.billingCurrency = billingCurrency?.currencyCode ?? spendingCurrency.currencyCode // 🆕 更新入账币种
                 
                 // 🆕 更新 CBF 金额
                 t.cbfAmount = cbfAmount ?? 0.0
@@ -484,7 +499,9 @@ struct AddTransactionView: View {
                     receiptData: imageData,
                     billingAmount: billingAmountDouble,
                     cashbackAmount: finalCashback,
-                    cbfAmount: cbfAmount ?? 0.0 // 🆕 使用手动输入的 CBF
+                    cbfAmount: cbfAmount ?? 0.0, // 🆕 使用手动输入的 CBF
+                    spendingCurrency: spendingCurrency.currencyCode, // 🆕 保存消费币种
+                    billingCurrency: billingCurrency?.currencyCode ?? spendingCurrency.currencyCode // 🆕 保存入账币种
                 )
                 context.insert(newTransaction)
             }

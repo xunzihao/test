@@ -98,7 +98,9 @@ struct CSVService {
                     isCreditTransaction: isCreditTransaction,
                     billingAmount: billingAmount,
                     cashbackAmount: cashback,
-                    cbfAmount: cbfAmount
+                    cbfAmount: cbfAmount,
+                    spendingCurrency: region.currencyCode, // 🆕 推断消费币种
+                    billingCurrency: region.currencyCode // 🆕 推断入账币种
                 )
                 
                 context.insert(newTransaction)

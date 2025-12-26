@@ -6,9 +6,10 @@ class Transaction: Identifiable {
     var merchant: String
     var category: Category
     var location: Region
-    
-    var spendingAmount: Double        // 原币金额
+    var spendingAmount: Double // 原币金额
     var billingAmount: Double // 入账金额
+    var spendingCurrency: String = "HKD" // 消费货币
+    var billingCurrency: String = "HKD" // 入账货币
     var cbfAmount: Double = 0.0 // CBF 费用金额（如果适用）
     
     var date: Date
@@ -46,7 +47,9 @@ class Transaction: Identifiable {
          receiptData: Data? = nil,
          billingAmount: Double? = nil,
          cashbackAmount: Double? = nil,
-         cbfAmount: Double = 0.0 // 👈 新增 CBF 金额参数
+         cbfAmount: Double = 0.0, // 👈 新增 CBF 金额参数
+         spendingCurrency: String = "HKD", // 👈 新增 消费货币参数
+         billingCurrency: String = "HKD" // 👈 新增 入账货币参数
     ) {
         self.merchant = merchant
         self.category = category
@@ -61,6 +64,8 @@ class Transaction: Identifiable {
         self.receiptData = receiptData
         self.billingAmount = billingAmount ?? spendingAmount
         self.cbfAmount = cbfAmount
+        self.spendingCurrency = spendingCurrency
+        self.billingCurrency = billingCurrency
         
         let finalBilling = billingAmount ?? spendingAmount
         

@@ -23,7 +23,7 @@ struct StatementAnalysisResult {
         var postDate: Date?      // 记账日
         var transDate: Date?     // 交易日
         var description: String  // 交易描述
-        var billingAmount: Double       // 金额（入账金额，本币 HKD）
+        var billingAmount: Double       // 入账金额
         var billingCurrency: String = AppConstants.Currency.hkd // 入账币种
         var paymentMethod: String? = nil // 支付方式（自动检测）
         
@@ -143,13 +143,50 @@ final class StatementAnalyzer {
         // 2. 提取结单日期
         extractStatementDate(from: rows, into: &result)
         
-        // 3. 提取交易记录
-        extractTransactionsFromTable(rows: rows, into: &result, statementDate: result.statementDate)
+        // 3. 检测结单币种 (RMB子账户检测)
+        let defaultCurrency = detectStatementCurrency(from: rows)
+        print("币种最终为：",defaultCurrency)
+        
+        // 4. 提取交易记录
+        extractTransactionsFromTable(rows: rows, into: &result, statementDate: result.statementDate, defaultCurrency: defaultCurrency)
         
         return result
     }
     
-    // MARK: - 信息提取子任务
+    private func detectStatementCurrency(from rows: [RecognizedRow]) -> String {
+
+
+        // 2. Amount pattern: "Amount (XXX)" or "Amount （XXX）" (supports full-width parentheses)
+        let headerCurrencyRegex = Regex {
+            "AMOUNT"
+            ZeroOrMore(.whitespace)
+            ChoiceOf {
+                "("
+                "（"
+            }
+            ZeroOrMore(.whitespace)
+            Capture { Repeat(count: 3) { ("A"..."Z") } }
+            ZeroOrMore(.whitespace)
+            ChoiceOf {
+                ")"
+                "）"
+            }
+        }
+
+        for row in rows {
+            let text = row.text.uppercased()
+            
+            // Check Amount (XXX) (e.g. "AMOUNT (CNY)")
+            if let match = try? headerCurrencyRegex.firstMatch(in: text) {
+                print( "amount文本：",text)
+                let currency = String(match.1)
+                print("币种为：",String(match.1))
+                if isCurrencyCode(currency) { return currency }
+            }
+        }
+        
+        return AppConstants.Currency.hkd
+    }
     
     private func extractCardInfo(from rows: [RecognizedRow], into result: inout StatementAnalysisResult) {
         for row in rows {
@@ -215,7 +252,7 @@ final class StatementAnalyzer {
         }
     }
     
-    private func extractTransactionsFromTable(rows: [RecognizedRow], into result: inout StatementAnalysisResult, statementDate: Date?) {
+    private func extractTransactionsFromTable(rows: [RecognizedRow], into result: inout StatementAnalysisResult, statementDate: Date?, defaultCurrency: String) {
         // 1. 找到表头
         guard let headerIndex = rows.firstIndex(where: { row in
             let text = row.text.uppercased()
@@ -248,6 +285,9 @@ final class StatementAnalyzer {
             let nextRow = (i + 1 < transactionRows.count) ? transactionRows[i + 1] : nil
             
             if var transaction = parseTableRow(currentRow, nextRow: nextRow, statementDate: statementDate) {
+                // 设置默认入账币种
+                transaction.billingCurrency = defaultCurrency
+                
                 // 检查后续行是否为 CBF 费用
                 var cbfRowOffset = 0
                 if let next = nextRow, isPaymentMethodRow(next) {
@@ -412,8 +452,12 @@ final class StatementAnalyzer {
             return AppConstants.Transaction.cashbackRebate
         }
         
+        // 2. 检测 UnionPay QR (包含 OCR 错误纠正: OR, CR)
+        if OCRService.containsAny(AppConstants.OCR.PaymentDetection.unionPayQR, in: correctedDesc) {
+            return AppConstants.Transaction.unionPayQR
+        }
+        
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.applePay, in: correctedDesc) { return AppConstants.Transaction.applePay }
-        if OCRService.containsAny(AppConstants.OCR.PaymentDetection.unionPayQR, in: correctedDesc) { return AppConstants.Transaction.unionPayQR }
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.autoRepayment, in: correctedDesc) { return AppConstants.OCR.autoRepayment }
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.repayment, in: correctedDesc) && amount < 0 { return AppConstants.Transaction.repayment }
         if OCRService.containsAny(AppConstants.OCR.PaymentDetection.instalment, in: correctedDesc) { return AppConstants.OCR.instalment }
@@ -555,18 +599,8 @@ final class StatementAnalyzer {
     static func fixDateYear(_ date: Date, referenceDate: Date) -> Date {
         var components = Calendar.current.dateComponents([.day, .month, .year], from: date)
         
-        let refYear = Calendar.current.component(.year, from: referenceDate)
-        let refMonth = Calendar.current.component(.month, from: referenceDate)
-        
-        components.year = refYear
-        
-        if let month = components.month {
-            // 如果交易月份大于结单月份，说明是上一年的交易
-            // 例如：结单日 2025年1月，交易日 12月 -> 2024年
-            if month > refMonth {
-                components.year = refYear - 1
-            }
-        }
+        // 强制年份为 2025
+        components.year = 2025
         
         return Calendar.current.date(from: components) ?? date
     }

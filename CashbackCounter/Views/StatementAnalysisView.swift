@@ -398,7 +398,6 @@ struct StatementAnalysisView: View {
             let cashbackCurrency = transaction.cashbackCurrency
             let amount = abs(transaction.billingAmount)
             let date = transaction.transDate ?? transaction.postDate ?? Date()
-            
             let calcResult = await CashbackService.calculateCashbackWithDetails(
                 card: card,
                 spendingAmount: amount,
@@ -506,6 +505,8 @@ struct StatementAnalysisView: View {
             let cbfFee = parsedTrans.cbfFee ?? 0.0
             let date = parsedTrans.transDate ?? parsedTrans.postDate ?? Date()
             let isCBFApplied = cbfFee > 0
+            let spendingCurrency = parsedTrans.spendingCurrency ?? parsedTrans.billingCurrency
+            let billingCurrency = parsedTrans.billingCurrency
             
             let transaction = Transaction(
                 merchant: parsedTrans.description,
@@ -521,7 +522,9 @@ struct StatementAnalysisView: View {
                 receiptData: nil,
                 billingAmount: absAmount,
                 cashbackAmount: calculatedCashback,
-                cbfAmount: cbfFee
+                cbfAmount: cbfFee,
+                spendingCurrency: spendingCurrency,
+                billingCurrency: billingCurrency
             )
             
             context.insert(transaction)
@@ -754,8 +757,17 @@ private struct StatementResultView: View {
     let onDeleteTransaction: (Int) -> Void
     let onAddTransaction: () -> Void
     
+    @AppStorage(AppConstants.Keys.showDebugOCRText) private var showDebugOCRText = false
+    
     var body: some View {
         List {
+            if showDebugOCRText {
+                Section("OCR Raw Text") {
+                    Text(result.rawText)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+            }
             Section(AppConstants.Card.cardInfo) {
                 if !result.cardName.isEmpty { LabeledContent(AppConstants.Card.cardName, value: result.cardName) }
                 if !result.cardLastFour.isEmpty { LabeledContent(AppConstants.Card.cardLastFour, value: result.cardLastFour) }

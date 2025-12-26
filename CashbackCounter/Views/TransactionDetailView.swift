@@ -103,7 +103,7 @@ private struct AmountDisplayView: View {
     
     var body: some View {
         // 建议：直接从 Transaction 获取货币符号，或统一使用 Region 的符号
-        let currency = transaction.location.currencySymbol
+        let currency = transaction.spendingCurrency
         let amountStr = String(format: "%.2f", transaction.spendingAmount)
         
         Text("- \(currency)\(amountStr)")
@@ -120,7 +120,8 @@ private struct DetailListView: View {
     // 简化：直接访问属性，减少对外部 Service 的依赖
     var cardName: String { transaction.card?.bankName ?? AppConstants.Transaction.unknownBank }
     var cardNumber: String { transaction.card?.endNum ?? AppConstants.Transaction.unknownCard }
-    var currency: String { transaction.location.currencySymbol }
+    var spendingCurrency: String { transaction.spendingCurrency }
+    var billingCurrency: String { transaction.billingCurrency }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -130,7 +131,14 @@ private struct DetailListView: View {
             Divider()
             DetailRow(title: AppConstants.Transaction.cardTailNumber, value: cardNumber)
             Divider()
-            DetailRow(title: AppConstants.Transaction.billingAmount, value: "\(currency)\(String(format: "%.2f", transaction.billingAmount))")
+            
+            // 如果消费币种和入账币种不同，显示两个
+            if spendingCurrency != billingCurrency {
+                DetailRow(title: AppConstants.Transaction.spendingAmount, value: "\(spendingCurrency)\(String(format: "%.2f", transaction.spendingAmount))")
+                Divider()
+            }
+            
+            DetailRow(title: AppConstants.Transaction.billingAmount, value: "\(billingCurrency)\(String(format: "%.2f", transaction.billingAmount))")
             Divider()
             DetailRow(title: AppConstants.Transaction.transactionRegion, value: "\(transaction.location.icon) \(transaction.location.rawValue)")
             Divider()
@@ -144,7 +152,7 @@ private struct DetailListView: View {
                 Divider()
                 DetailRowHighlight(
                     title: "CBF",
-                    value: "-\(currency)\(String(format: "%.2f", transaction.cbfAmount))",
+                    value: "-\(billingCurrency)\(String(format: "%.2f", transaction.cbfAmount))",
                     color: .orange
                 )
             }
@@ -159,7 +167,7 @@ private struct CashbackHighlightView: View {
     let transaction: Transaction
     
     var body: some View {
-        let currency = transaction.location.currencySymbol
+        let currency = transaction.spendingCurrency
         let cashback = transaction.cashbackamount
         let rate = String(format: "%.1f", transaction.rate * 100)
         
@@ -194,7 +202,7 @@ private struct TotalCostView: View {
     let transaction: Transaction
     
     var body: some View {
-        let currency = transaction.location.currencySymbol
+        let currency = transaction.billingCurrency // CBF is usually added to billing currency
         let total = transaction.billingAmount + transaction.cbfAmount
         
         VStack(spacing: 8) {

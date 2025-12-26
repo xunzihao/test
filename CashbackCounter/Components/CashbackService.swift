@@ -47,10 +47,10 @@ struct CashbackService {
     ) -> Double {
         
         let baseRate = card.defaultRate
-        let potentialBaseReward = billingAmount * baseRate
+        let potentialBaseReward = floor(billingAmount * baseRate * 100) / 100
         
         let bonusRate = card.specialRates[category] ?? 0.0
-        let potentialBonusReward = billingAmount * bonusRate
+        let potentialBonusReward = floor(billingAmount * bonusRate * 100) / 100
         
         // 准备上限阈值
         let monthlyCapLimit = card.monthlyBaseCap ?? 0
@@ -74,7 +74,7 @@ struct CashbackService {
         
         for t in yearlyTransactions {
             let isMonthly = calendar.isDate(t.date, equalTo: date, toGranularity: .month)
-            let baseReward = t.billingAmount * card.defaultRate
+            let baseReward = floor(t.billingAmount * card.defaultRate * 100) / 100
             usedBaseYearly += baseReward
             if isMonthly {
                 usedBaseMonthly += baseReward
@@ -88,7 +88,7 @@ struct CashbackService {
                 .filter { $0.category == category }
                 .reduce(0) { sum, t in
                     let tBonusRate = card.specialRates[t.category] ?? 0.0
-                    return sum + (t.billingAmount * tBonusRate)
+                    return sum + floor(t.billingAmount * tBonusRate * 100) / 100
                 }
         }
         
@@ -116,7 +116,7 @@ struct CashbackService {
             finalBonus = min(potentialBonusReward, remaining)
         }
         
-        return finalBase + finalBonus
+        return floor((finalBase + finalBonus) * 100) / 100
     }
     
     // MARK: - Detailed Calculation
@@ -315,8 +315,8 @@ struct CashbackService {
         logger.debug("------------------------------------------------------------")
         
         // 👇 手动计算封顶返现，而不是调用 calculateCappedCashback（它用的是 defaultRate）
-        let potentialBaseReward = finalBillingAmount * baseRate
-        let potentialBonusReward = finalBillingAmount * bonusRate
+        let potentialBaseReward = floor(finalBillingAmount * baseRate * 100) / 100
+        let potentialBonusReward = floor(finalBillingAmount * bonusRate * 100) / 100
         
         logger.debug("  • 潜在基础返现: \(String(format: "%.2f", potentialBaseReward)) \(billingCurrencyCode)")
         logger.debug("  • 潜在类别加成: \(String(format: "%.2f", potentialBonusReward)) \(billingCurrencyCode)")
@@ -366,7 +366,7 @@ struct CashbackService {
                 .filter { $0.category == category }
                 .reduce(0) { sum, transaction in
                     let bRate = (transaction.card?.specialRates[transaction.category] ?? 0.0)
-                    return sum + bRate * transaction.billingAmount
+                    return sum + floor(bRate * transaction.billingAmount * 100) / 100
                 }
             let remainingCategoryCap = max(0, categoryCapLimit - usedCategoryCap)
             actualBonusReward = min(actualBonusReward, remainingCategoryCap)
@@ -378,7 +378,7 @@ struct CashbackService {
             logger.debug("  • 类别加成: \(String(format: "%.2f", actualBonusReward)) \(billingCurrencyCode) (无上限)")
         }
         
-        let finalCashback = actualBaseReward + actualBonusReward
+        let finalCashback = floor((actualBaseReward + actualBonusReward) * 100) / 100
         
         logger.debug("\n  ✅ 最终返现计算:")
         logger.debug("    基础返现: \(String(format: "%.2f", actualBaseReward)) \(billingCurrencyCode)")
@@ -402,7 +402,7 @@ struct CashbackService {
         var totalCost = finalBillingAmount
         
         if isCBFApplied {
-            cbfAmount = finalBillingAmount * card.cbf
+            cbfAmount = floor(finalBillingAmount * card.cbf * 100) / 100
             totalCost = finalBillingAmount + cbfAmount
             let cbfPercent = card.cbf * 100
             

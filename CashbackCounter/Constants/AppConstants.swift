@@ -493,6 +493,7 @@ struct AppConstants {
         static let userLanguage = "userLanguage"
         static let trendDisplayMode = "trendDisplayMode" // 0: 12 months, 1: all time
         static let cachedExchangeRates = "cached_exchange_rates"
+        static let showDebugOCRText = "showDebugOCRText"
     }
     
     struct API {
@@ -604,8 +605,11 @@ struct AppConstants {
         static let supportedLanguages = ["zh-Hans", "zh-Hant", "en-US"]
         
         struct PaymentDetection {
-            static let applePay = ["APPLE PAY", "APPLEPAY", "苹果支付", "アップルペイ"]
-            static let unionPayQR = ["二维码", "QR", "扫码", "云闪付", "QUICKPASS", "UNIONPAY QR", "QRコード", "スキャン"]
+            static let applePay = ["APPLE PAY", "APPLEPAY", "苹果支付", "アップルペイ","APPIE PAY"]
+            static let unionPayQR = [
+                "二维码", "QR", "扫码", "云闪付", "QUICKPASS",
+                "UNIONPAY QR", "UNIONPAY OR", "UNIONPAY CR", "UNIONPAY Q R","UNIDNPAY OR", "UNIDNPAY CR","UNIONPAY9R","UNTONPAY OR"
+            ]
             static let online = ["网购", "在线支付", "ONLINE", "淘宝", "天猫", "京东", "美团", "饿了么", "拼多多", "E-COMMERCE", "オンライン", "Online Payment"]
             static let physicalStore = ["收银", "店铺", "门店", "STORE", "SHOP", "RECEIPT", "レシート"]
             static let autoRepayment = ["PAID BY AUTOPAY", "自动还款"]

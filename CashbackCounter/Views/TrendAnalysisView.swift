@@ -150,12 +150,43 @@ struct TrendAnalysisView: View {
         let now = Date()
         var data: [MonthlyData] = []
         
-        // 确定显示币种
-        // 规则：
-        // 1. 如果选中了特定卡片，直接使用该卡片的币种
-        // 2. 如果是"全部"或"奖赏钱"，检查所有相关交易
-        //    - 如果只有一种币种，就用该币种
-        //    - 如果有多种币种，默认换算为 CNY (因为不同币种无法直接在图表叠加)
+        // --- 1. 准备数据 & 全局抵消计算 ---
+        // 预先筛选出符合当前 Filter 的所有交易
+        let relevantTransactions: [Transaction]
+        switch selectedFilter {
+        case .all:
+            relevantTransactions = transactions
+        case .rewardCash:
+            relevantTransactions = transactions.filter { $0.card == nil }
+        case .card(let card):
+            relevantTransactions = transactions.filter { $0.card?.id == card.id }
+        }
+        
+        // 全局计算智能抵消 (Offset)
+        // 必须在全局范围内匹配，因为消费和退款可能不在同一个月
+        // 这样可以确保 TrendAnalysisView 的总额与 BillHomeView (全选模式) 一致
+        let refunds = relevantTransactions.filter { $0.isCreditTransaction }
+        let expenses = relevantTransactions.filter { !$0.isCreditTransaction }
+        var offsetTransactionIDs = Set<PersistentIdentifier>()
+        var availableExpenses = expenses
+        
+        for refund in refunds {
+            if let matchIndex = availableExpenses.firstIndex(where: { expense in
+                let amountDiff = abs(abs(expense.billingAmount) - abs(refund.billingAmount))
+                guard amountDiff < 1.0 else { return false }
+                
+                let expMerchant = expense.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                let refMerchant = refund.merchant.uppercased().replacingOccurrences(of: " ", with: "")
+                return expMerchant.contains(refMerchant) || refMerchant.contains(expMerchant)
+            }) {
+                let matchedExpense = availableExpenses[matchIndex]
+                offsetTransactionIDs.insert(matchedExpense.persistentModelID)
+                offsetTransactionIDs.insert(refund.persistentModelID)
+                availableExpenses.remove(at: matchIndex)
+            }
+        }
+        
+        // --- 2. 确定显示币种 ---
         let targetCurrency: String
         let targetSymbol: String
         
@@ -164,26 +195,13 @@ struct TrendAnalysisView: View {
             targetCurrency = card.issueRegion.currencyCode
             targetSymbol = card.issueRegion.currencySymbol
         case .all, .rewardCash:
-            // 筛选出所有相关的交易
-            let relevantTransactions: [Transaction]
-            if selectedFilter == .rewardCash {
-                relevantTransactions = transactions.filter { $0.card == nil }
-            } else {
-                relevantTransactions = transactions
-            }
-            
-            // 统计涉及的币种
             let involvedCurrencies = Set(relevantTransactions.compactMap { $0.card?.issueRegion.currencyCode ?? "CNY" })
             
             if involvedCurrencies.count == 1, let first = involvedCurrencies.first {
                  targetCurrency = first
-                 // 简单映射符号，或者从任一交易/卡片获取。这里简单硬编码常见符号，或者查找对应的 Region
-                 // 更好的方式是找到对应的卡片来获取符号，但这里只有 currencyCode
-                 // 尝试找一个该币种的 transaction 或 card 来获取符号
                  if let tx = relevantTransactions.first(where: { $0.card?.issueRegion.currencyCode == first }), let card = tx.card {
                      targetSymbol = card.issueRegion.currencySymbol
                  } else {
-                    // 如果是奖赏钱账户且只有 CNY，则不显示符号 (满足用户需求: "CN¥这个可以不写")
                     if selectedFilter == .rewardCash && first == "CNY" {
                         targetSymbol = ""
                     } else {
@@ -191,7 +209,6 @@ struct TrendAnalysisView: View {
                     }
                  }
              } else {
-                 // 混合币种，默认用 CNY
                  targetCurrency = "CNY"
                  targetSymbol = "CN¥"
              }
@@ -205,7 +222,7 @@ struct TrendAnalysisView: View {
         
         if trendDisplayMode == 1 { // 全部记录
             // 找到最早的交易日期
-            let allRelevantDates = transactions.map { $0.date }
+            let allRelevantDates = relevantTransactions.map { $0.date }
             if let earliest = allRelevantDates.min() {
                 // 向前取整到月首
                 let components = calendar.dateComponents([.year, .month], from: earliest)
@@ -224,94 +241,31 @@ struct TrendAnalysisView: View {
         
         // 生成数据
         for i in 0..<monthCount {
-            // 从现在往前推 i 个月 (这样逻辑和之前相反了，之前是 i=0 是现在)
-            // 之前的逻辑: date = now - i months (i: 0...11) -> 结果是倒序的 (Now...11 months ago)
-            // 然后 reversed() -> (11 months ago ... Now)
-            
-            // 新逻辑: 我们需要覆盖 [startDate, now]
-            // 为了保持和之前一样的倒序生成然后 reverse 的逻辑（或者直接正序生成）
-            // 让我们正序生成吧，更直观
-            
             if let date = calendar.date(byAdding: .month, value: -(monthCount - 1 - i), to: now) {
                  let components = calendar.dateComponents([.year, .month], from: date)
                 
                 // 筛选
-                var monthlyTransactions = transactions.filter { t in
+                var monthlyTransactions = relevantTransactions.filter { t in
                     let tComponents = calendar.dateComponents([.year, .month], from: t.date)
                     let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
-                    
-                    let isFilterMatch: Bool
-                    switch selectedFilter {
-                    case .all:
-                        isFilterMatch = true
-                    case .rewardCash:
-                        isFilterMatch = (t.card == nil)
-                    case .card(let card):
-                        isFilterMatch = (t.card?.id == card.id)
-                    }
-                    
-                    // 逻辑修改：
-                    // 1. 如果是支出分析，排除所有信用交易
-                    // 2. 如果是返现分析，保留普通交易(用于计算) + 纯返现交易(isCreditTransaction=true && method="返现")
-                    if type == .expense {
-                        // 特例：CBF 费用虽然可能被标记为 CR，但应计入支出
-                        return isSameMonth && isFilterMatch && (t.isCreditTransaction != true || t.paymentMethod == AppConstants.Transaction.cbf)
-                    } else {
-                        // 返现分析
-                        return isSameMonth && isFilterMatch && (
-                            t.isCreditTransaction == false ||
-                            t.paymentMethod == AppConstants.Transaction.cashbackRebate
-                        )
-                    }
-                }
-                
-                // --- 智能抵消逻辑 (与 BillHomeView 保持一致) ---
-                // 1. 找出所有退款/信用交易 (在支出分析中通常已经被排除，但在返现分析中可能需要处理)
-                // 注意：在 expense 模式下，monthlyTransactions 已经过滤掉了 CR 交易。
-                // 所以，要在 expense 模式下实现抵消，我们需要先获取包含 CR 的原始数据集，找出抵消关系，再过滤。
-                
-                // 修正策略：
-                // 我们需要重新从原始 transactions 中筛选出本月的所有相关交易（包含 CR），
-                // 计算抵消集合，然后再应用 type == .expense 的过滤。
-                
-                let allMonthTxs = transactions.filter { t in
-                    let tComponents = calendar.dateComponents([.year, .month], from: t.date)
-                    let isSameMonth = tComponents.year == components.year && tComponents.month == components.month
-                    
-                    let isFilterMatch: Bool
-                    switch selectedFilter {
-                    case .all: isFilterMatch = true
-                    case .rewardCash: isFilterMatch = (t.card == nil)
-                    case .card(let card): isFilterMatch = (t.card?.id == card.id)
-                    }
-                    return isSameMonth && isFilterMatch
-                }
-                
-                let refunds = allMonthTxs.filter { $0.isCreditTransaction }
-                let expenses = allMonthTxs.filter { !$0.isCreditTransaction }
-                var offsetTransactionIDs = Set<PersistentIdentifier>()
-                var availableExpenses = expenses
-                
-                for refund in refunds {
-                    if let matchIndex = availableExpenses.firstIndex(where: { expense in
-                        let amountDiff = abs(abs(expense.billingAmount) - abs(refund.billingAmount))
-                        guard amountDiff < 1.0 else { return false }
-                        
-                        let expMerchant = expense.merchant.uppercased().replacingOccurrences(of: " ", with: "")
-                        let refMerchant = refund.merchant.uppercased().replacingOccurrences(of: " ", with: "")
-                        return expMerchant.contains(refMerchant) || refMerchant.contains(expMerchant)
-                    }) {
-                        let matchedExpense = availableExpenses[matchIndex]
-                        offsetTransactionIDs.insert(matchedExpense.persistentModelID)
-                        offsetTransactionIDs.insert(refund.persistentModelID)
-                        availableExpenses.remove(at: matchIndex)
-                    }
+                    return isSameMonth
                 }
                 
                 // 应用抵消：过滤掉被标记为抵消的交易
                 monthlyTransactions = monthlyTransactions.filter { !offsetTransactionIDs.contains($0.persistentModelID) }
                 
-                // 计算总额 (根据类型区分逻辑)
+                // 应用类型过滤 (Expense vs Cashback)
+                monthlyTransactions = monthlyTransactions.filter { t in
+                    if type == .expense {
+                        // 支出分析，排除所有信用交易 (除了 CBF)
+                        return t.isCreditTransaction != true || t.paymentMethod == AppConstants.Transaction.cbf
+                    } else {
+                        // 返现分析，保留普通交易 + 纯返现交易
+                        return t.isCreditTransaction == false || t.paymentMethod == AppConstants.Transaction.cashbackRebate
+                    }
+                }
+                
+                // 计算总额
                 let total = monthlyTransactions.reduce(0.0) { sum, t in
                     let amountToAdd: Double
                     // 👇 分支逻辑

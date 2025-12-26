@@ -32,7 +32,8 @@ struct TextCorrector {
             ("Ta0bao", "Taobao"),          // o → 0
             
             // UnionPay
-            ("UNIONPAY OR", "UNIONPAY QR") // OR -> QR
+            ("UNIONPAY OR", "UNIONPAY QR"), // OR -> QR
+            ("UNIONPAY CR", "UNIONPAY QR"), // CR -> QR
         ]
         
         // Apply corrections

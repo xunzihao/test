@@ -19,6 +19,9 @@ struct SettingsView: View {
     // 2. 语言设置 "system" = 跟随系统, "zh-Hans" = 中文, "en" = 英文
     @AppStorage("userLanguage") private var userLanguage: String = "system"
     
+    // 调试设置
+    @AppStorage(AppConstants.Keys.showDebugOCRText) private var showDebugOCRText = false
+    
     // 添加环境变量以访问 ModelContext
     @Environment(\.modelContext) var modelContext
     
@@ -30,6 +33,15 @@ struct SettingsView: View {
     @State private var fixRebateCount = 0
     @State private var fixOffsetCount = 0 // 🆕 新增抵消计数
     
+    // 控制去重结果弹窗
+    @State private var showDeduplicateAlert = false
+    @State private var deduplicateCount = 0
+    
+    // 控制重算结果弹窗
+    @State private var showRecalculateAlert = false
+    @State private var recalculateCount = 0
+    @State private var isRecalculating = false
+    
     var body: some View {
         NavigationStack {
             List {
@@ -40,15 +52,18 @@ struct SettingsView: View {
                 AppearanceSection(userTheme: $userTheme, userLanguage: $userLanguage)
                 
                 // 3. 常规设置
-                GeneralSection()
+                GeneralSection(showDebugOCRText: $showDebugOCRText)
                 
                 // 3.5 趋势分析设置
                 TrendSettingsSection()
                 
                 // 4. 数据管理
-                DataManagementSection {
-                    fixHistoryTransactions()
-                }
+                DataManagementSection(
+                    onFixRebate: { fixHistoryTransactions() },
+                    onDeduplicate: { removeDuplicateTransactions() },
+                    onRecalculate: { recalculateAllTransactions() },
+                    isRecalculating: isRecalculating
+                )
                 
                 // 5. 关于
                 AboutSection(appVersion: appVersion)
@@ -72,6 +87,18 @@ struct SettingsView: View {
                 Button("好的", role: .cancel) { }
             } message: {
                 Text("已修正 \(fixRebateCount) 笔返现交易，识别并处理 \(fixOffsetCount) 对抵消交易。")
+            }
+            // 去重结果弹窗
+            .alert("去重完成", isPresented: $showDeduplicateAlert) {
+                Button("好的", role: .cancel) { }
+            } message: {
+                Text("已合并并删除 \(deduplicateCount) 条重复交易。")
+            }
+            // 重算结果弹窗
+            .alert("计算完成", isPresented: $showRecalculateAlert) {
+                Button("好的", role: .cancel) { }
+            } message: {
+                Text("已重新计算 \(recalculateCount) 笔交易的返现和费用。")
             }
         }
     }
@@ -207,6 +234,107 @@ struct SettingsView: View {
             print("数据重置失败: \(error)")
         }
     }
+    
+    private func removeDuplicateTransactions() {
+        do {
+            let descriptor = FetchDescriptor<Transaction>()
+            let transactions = try modelContext.fetch(descriptor)
+            
+            // 使用字典对交易进行分组
+            // Key: 组合哈希值 (日期, 商户, 支付方式, 消费金额, 入账金额, 消费币种, 入账币种)
+            // Value: 交易数组
+            var groups: [Int: [Transaction]] = [:]
+            
+            for transaction in transactions {
+                var hasher = Hasher()
+                hasher.combine(transaction.date)
+                hasher.combine(transaction.merchant)
+                hasher.combine(transaction.paymentMethod)
+                hasher.combine(transaction.spendingAmount)
+                hasher.combine(transaction.billingAmount)
+                hasher.combine(transaction.spendingCurrency)
+                hasher.combine(transaction.billingCurrency)
+                let hash = hasher.finalize()
+                
+                groups[hash, default: []].append(transaction)
+            }
+            
+            var count = 0
+            for (_, duplicates) in groups {
+                if duplicates.count > 1 {
+                    // 保留第一个，删除其余的
+                    // 优先保留有收据图片的（如果有的话）
+                    let sorted = duplicates.sorted { t1, t2 in
+                        if (t1.receiptData != nil) != (t2.receiptData != nil) {
+                            return t1.receiptData != nil
+                        }
+                        return false // 否则保持原序
+                    }
+                    
+                    let toDelete = sorted.dropFirst()
+                    for item in toDelete {
+                        modelContext.delete(item)
+                        count += 1
+                    }
+                }
+            }
+            
+            try modelContext.save()
+            deduplicateCount = count
+            showDeduplicateAlert = true
+            
+        } catch {
+            print("Failed to deduplicate: \(error)")
+        }
+    }
+    
+    private func recalculateAllTransactions() {
+        isRecalculating = true
+        
+        Task { @MainActor in
+            do {
+                let descriptor = FetchDescriptor<Transaction>(sortBy: [SortDescriptor(\.date)])
+                let transactions = try modelContext.fetch(descriptor)
+                
+                var count = 0
+                
+                for transaction in transactions {
+                    guard let card = transaction.card else { continue }
+                    
+                    // 使用 CashbackService 重新计算
+                    let result = await CashbackService.calculateCashbackWithDetails(
+                        card: card,
+                        spendingAmount: transaction.spendingAmount,
+                        spendingCurrencyCode: transaction.spendingCurrency,
+                        paymentMethod: transaction.paymentMethod,
+                        isOnlineShopping: transaction.isOnlineShopping,
+                        isCBFApplied: transaction.isCBFApplied,
+                        category: transaction.category,
+                        location: transaction.location,
+                        date: transaction.date,
+                        selectedConditionIndex: nil, // 自动匹配
+                        transactionToExclude: transaction, // 排除自己以正确计算上限
+                        billingAmount: transaction.billingAmount
+                    )
+                    
+                    // 更新交易数据
+                    transaction.cashbackamount = floor(result.finalCashback * 100) / 100
+                    transaction.cbfAmount = floor(result.cbfAmount * 100) / 100
+                    
+                    count += 1
+                }
+                
+                try modelContext.save()
+                recalculateCount = count
+                isRecalculating = false
+                showRecalculateAlert = true
+                
+            } catch {
+                print("Recalculation failed: \(error)")
+                isRecalculating = false
+            }
+        }
+    }
 }
 
 // MARK: - Subviews
@@ -280,6 +408,8 @@ private struct AppearanceSection: View {
 
 // 3. 常规设置
 private struct GeneralSection: View {
+    @Binding var showDebugOCRText: Bool
+    
     var body: some View {
         Section(header: Text(AppConstants.Settings.general)) {
             NavigationLink(destination: Text(AppConstants.Settings.multiCurrencySupport)) {
@@ -288,6 +418,10 @@ private struct GeneralSection: View {
             
             NavigationLink(destination: NotificationSettingsView()) {
                 Label(AppConstants.Settings.notifications, systemImage: "bell")
+            }
+            
+            Toggle(isOn: $showDebugOCRText) {
+                Label("显示 OCR 原始文本 (调试)", systemImage: "text.viewfinder")
             }
         }
     }
@@ -310,6 +444,9 @@ private struct TrendSettingsSection: View {
 // 4. 数据管理
 private struct DataManagementSection: View {
     var onFixRebate: () -> Void
+    var onDeduplicate: () -> Void
+    var onRecalculate: () -> Void
+    var isRecalculating: Bool
     
     var body: some View {
         Section(header: Text(AppConstants.Settings.dataManagement)) {
@@ -319,6 +456,23 @@ private struct DataManagementSection: View {
             Button(action: onFixRebate) {
                 Label("修正历史返现交易", systemImage: "arrow.triangle.2.circlepath.doc.on.clipboard")
             }
+            
+            Button(action: onDeduplicate) {
+                Label("合并重复交易", systemImage: "square.on.square")
+            }
+            
+            Button(action: onRecalculate) {
+                if isRecalculating {
+                    HStack {
+                        Label("重新计算所有返现", systemImage: "arrow.clockwise")
+                        Spacer()
+                        ProgressView()
+                    }
+                } else {
+                    Label("重新计算所有返现", systemImage: "arrow.clockwise")
+                }
+            }
+            .disabled(isRecalculating)
             
             HStack {
                 Label(AppConstants.Settings.dataImportExport, systemImage: "square.and.arrow.up")
@@ -368,8 +522,4 @@ private struct DangerZoneSection: View {
             }
         }
     }
-}
-
-#Preview {
-    SettingsView()
 }

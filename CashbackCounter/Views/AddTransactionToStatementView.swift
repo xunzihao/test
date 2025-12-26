@@ -24,6 +24,7 @@ struct AddTransactionToStatementView: View {
     @State private var transDate: Date = Date()
     @State private var paymentMethod: String = AppConstants.OCR.sale
     @State private var showCBFInput: Bool = false
+    @State private var currency: String = AppConstants.Currency.hkd
     
     // 焦点管理
     @FocusState private var focusedField: Field?
@@ -45,6 +46,7 @@ struct AddTransactionToStatementView: View {
             _transDate = State(initialValue: t.transDate ?? Date())
             _paymentMethod = State(initialValue: t.paymentMethod ?? AppConstants.OCR.sale)
             _showCBFInput = State(initialValue: t.cbfFee != nil && t.cbfFee! > 0)
+            _currency = State(initialValue: t.billingCurrency)
         }
     }
     
@@ -57,7 +59,8 @@ struct AddTransactionToStatementView: View {
                     amount: $amount,
                     cbfFee: $cbfFee,
                     showCBFInput: $showCBFInput,
-                    focusedField: $focusedField
+                    focusedField: $focusedField,
+                    currency: $currency
                 )
                 
                 DateSection(postDate: $postDate, transDate: $transDate)
@@ -102,7 +105,7 @@ struct AddTransactionToStatementView: View {
             transDate: transDate,
             description: merchantName,
             billingAmount: amount,
-            billingCurrency: AppConstants.Currency.hkd,
+            billingCurrency: currency,
             paymentMethod: paymentMethod,
             isForeignCurrency: false,
             spendingCurrency: nil,
@@ -135,11 +138,12 @@ private struct AmountSection: View {
     @Binding var cbfFee: Double?
     @Binding var showCBFInput: Bool
     var focusedField: FocusState<AddTransactionToStatementView.Field?>.Binding
+    @Binding var currency: String
     
     var body: some View {
         Section(AppConstants.StatementAnalysis.transactionAmountSection) {
             HStack {
-                Text(AppConstants.StatementAnalysis.currencyHKD)
+                Text(currency)
                     .foregroundColor(.secondary)
                     .fontWeight(.medium)
                 TextField(AppConstants.StatementAnalysis.amountField, value: $amount, format: .number.precision(.fractionLength(2)))

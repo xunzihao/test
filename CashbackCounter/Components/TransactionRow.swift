@@ -158,7 +158,7 @@ private extension TransactionRow {
     }
     
     var amountString: String {
-        "\(transaction.location.currencySymbol)\(Formatters.currency(transaction.spendingAmount))"
+        "\(transaction.billingCurrency)\(Formatters.currency(transaction.spendingAmount))"
     }
     
     var shouldShowCashback: Bool {
@@ -170,7 +170,7 @@ private extension TransactionRow {
     
     var cashbackString: String {
         let amount = transaction.isCreditTransaction ? 0 : transaction.cashbackamount
-        return "\(AppConstants.Transaction.cashbackPrefix) \(transaction.location.currencySymbol)\(Formatters.currency(amount))"
+        return "\(AppConstants.Transaction.cashbackPrefix) \(transaction.billingCurrency)\(Formatters.currency(amount))"
     }
     
     // MARK: - Accessibility
